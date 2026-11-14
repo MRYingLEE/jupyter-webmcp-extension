@@ -100,7 +100,16 @@ const REQUIRED_TOOLS = [
 ];
 
 async function checkTools(page, base) {
-  const names = await page.evaluate(async () => (await document.modelContext.getTools()).map(tool => tool.name));
+  // The status turns active before the tools are synced, so wait for them to appear.
+  const deadline = Date.now() + STATUS_TIMEOUT_MS;
+  let names;
+  for (;;) {
+    names = await page.evaluate(async () => (await document.modelContext.getTools()).map(tool => tool.name));
+    if (REQUIRED_TOOLS.every(name => names.includes(name)) || Date.now() > deadline) {
+      break;
+    }
+    await new Promise(resolveDelay => setTimeout(resolveDelay, 500));
+  }
   for (const name of REQUIRED_TOOLS) {
     assert.ok(names.includes(name), `${base}: missing tool ${name}`);
   }

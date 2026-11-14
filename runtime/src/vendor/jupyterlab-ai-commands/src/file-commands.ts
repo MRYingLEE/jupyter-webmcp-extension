@@ -1,3 +1,4 @@
+import type { ISharedDocument, ISharedFile } from '@jupyter/ydoc';
 import { PathExt } from '@jupyterlab/coreutils';
 import { IDocumentManager } from '@jupyterlab/docmanager';
 import {
@@ -16,6 +17,14 @@ import { CommandRegistry } from '@lumino/commands';
 const UNIFIED_FILE_DIFF_COMMAND_ID = 'jupyterlab-diff:unified-file-diff';
 const BACKGROUND_DESCRIPTION =
   'Whether to avoid activating the document widget so as not to disturb the user (default: true)';
+
+/**
+ * Text file models are ISharedFile, which has getSource/setSource. The generic
+ * ISharedDocument type on IModel omits them in ydoc 1.x (JupyterLab 4.0).
+ */
+function textModel(sharedModel: ISharedDocument): ISharedFile {
+  return sharedModel as ISharedFile;
+}
 
 /**
  * Helper function to get a document widget by path or use the active one
@@ -569,7 +578,7 @@ function registerGetFileInfoCommand(
       }
 
       const sharedModel = model.sharedModel;
-      const content = sharedModel.getSource();
+      const content = textModel(sharedModel).getSource();
       const resolvedFilePath = widget?.context.path ?? filePath;
       const fileName = widget?.title.label ?? PathExt.basename(filePath);
       const fileExtension = PathExt.extname(resolvedFilePath) || 'unknown';
@@ -663,9 +672,9 @@ function registerSetFileContentCommand(
       }
 
       const sharedModel = model.sharedModel;
-      const previousContent = sharedModel.getSource();
+      const previousContent = textModel(sharedModel).getSource();
 
-      sharedModel.setSource(content);
+      textModel(sharedModel).setSource(content);
 
       const shouldShowDiff = showDiff ?? true;
       if (shouldShowDiff && previousContent !== content) {

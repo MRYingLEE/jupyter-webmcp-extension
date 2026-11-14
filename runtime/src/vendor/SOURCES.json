@@ -4,6 +4,10 @@
     {
       "file": "jupyterlab-ai-commands/src/notebook-commands.ts",
       "change": "CellExecutionStatus also accepts 'aborted' (type-only; JupyterLab 4.6 @jupyterlab/cells returns this status)."
+    },
+    {
+      "file": "jupyterlab-ai-commands/src/file-commands.ts",
+      "change": "Adds a type-only textModel() helper that casts the document model to ISharedFile before getSource/setSource (type-only; ydoc 1.x ISharedDocument omits them, JupyterLab 4.0 text files are YFile)."
     }
   ],
   "sources": {

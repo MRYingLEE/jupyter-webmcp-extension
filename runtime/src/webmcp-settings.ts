@@ -25,8 +25,9 @@ export function normalizeSettings(raw: unknown): Record<string, unknown> {
   }
   const source = raw as Record<string, unknown>;
   for (const key of ['disabledTools', 'blockedCommands'] as const) {
-    if (Array.isArray(source[key])) {
-      values[key] = source[key].filter(
+    const list = source[key];
+    if (Array.isArray(list)) {
+      values[key] = list.filter(
         (item): item is string => typeof item === 'string'
       );
     }
