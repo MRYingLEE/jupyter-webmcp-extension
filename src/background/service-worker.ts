@@ -4,7 +4,7 @@
  */
 
 import { ENABLED_ORIGINS_KEY } from '../shared/storage';
-import { originPattern, webOrigin } from '../shared/origin';
+import { isWebOrigin, originPattern, webOrigin } from '../shared/origin';
 import type {
   ExtensionMessage,
   IStateResponse,
@@ -162,6 +162,22 @@ async function updateBadge(tabId: number, status: ITabStatus): Promise<void> {
   await chrome.action.setBadgeText({ tabId, text: failed ? '!' : 'ON' });
 }
 
+/**
+ * Whether the message comes from one of this extension's pages (popup or
+ * options). Extension pages opened in a tab also have `sender.tab`, so the
+ * URL is checked instead. A content script's `sender.url` is the page's URL.
+ */
+function isExtensionPage(sender: chrome.runtime.MessageSender): boolean {
+  return (
+    sender.id === chrome.runtime.id &&
+    sender.url?.startsWith(chrome.runtime.getURL('')) === true
+  );
+}
+
+/**
+ * Only the extension's own pages may change enablement or read tab state.
+ * Content scripts may only report status, and only for their own tab.
+ */
 async function handleMessage(
   message: ExtensionMessage,
   sender: chrome.runtime.MessageSender
@@ -170,17 +186,26 @@ async function handleMessage(
     case 'status': {
       const tabId = sender.tab?.id;
       const origin = webOrigin(sender.url);
-      if (tabId !== undefined && origin) {
+      if (sender.id === chrome.runtime.id && tabId !== undefined && origin) {
         await recordStatus(tabId, origin, sender.documentId, message.status);
       }
       return { ok: true };
     }
     case 'enable':
+      if (!isExtensionPage(sender) || !isWebOrigin(message.origin)) {
+        return { ok: false, error: 'Not allowed.' };
+      }
       return enable(message.origin);
     case 'disable':
+      if (!isExtensionPage(sender) || !isWebOrigin(message.origin)) {
+        return { ok: false, error: 'Not allowed.' };
+      }
       await disable(message.origin);
       return { ok: true };
     case 'state': {
+      if (!isExtensionPage(sender) || !isWebOrigin(message.origin)) {
+        return { ok: false, error: 'Not allowed.' };
+      }
       const enabled = (await enabledOrigins()).includes(message.origin);
       const statuses = await readTabStatuses();
       const response: IStateResponse = { enabled };

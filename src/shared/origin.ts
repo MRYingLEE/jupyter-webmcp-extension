@@ -18,6 +18,15 @@ export function webOrigin(url: string | undefined): string | null {
   }
 }
 
+/** Whether a value is exactly a normalized http(s) origin, with no path or wildcard. */
+export function isWebOrigin(value: unknown): value is string {
+  return (
+    typeof value === 'string' &&
+    !value.includes('*') &&
+    webOrigin(value) === value
+  );
+}
+
 /** The host permission pattern that covers an origin. */
 export function originPattern(origin: string): string {
   return `${origin}/*`;

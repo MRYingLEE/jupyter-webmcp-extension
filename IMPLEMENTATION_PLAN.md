@@ -181,7 +181,7 @@ make a **runtime confirmation** inside the injected plugins using
 | Present (>= 0.4) | Absent | Runtime, WebMCP part only | The upstream manager discovers the native commands. |
 | Absent | Present | Runtime, AI part only | The native `ToolManager` picks up the new commands through `commandChanged`. |
 | Absent | Absent | Runtime, both parts | Add the AI commands, then start the WebMCP manager. |
-| Present (< 0.4) or unknown version | Any | AI part never; WebMCP part only if WebMCP is absent | Warn. Disable default tools whose command schema (`describedBy`) does not match the pinned expectation. Do not overwrite native commands. |
+| Present (< 0.4) or unknown version | Any | Treated as Present (>= 0.4): AI part never; WebMCP part as for the row above | **Out of scope.** No version check, warning, or schema-based tool disabling. Native commands are never overwritten. |
 | Disabled through `disabledExtensions` or locked | Any | Nothing for that component | Respect the administrator's intent and show the reason. |
 
 Rules:
@@ -318,8 +318,8 @@ Rules:
     with the Pyodide kernel that matches it; Notebook 7.0.x and 7.6.x.
   - Fixtures: neither component installed; AI commands only; both
     installed natively; and WebMCP only (a controlled build, since pip pulls
-    in AI commands). Include a `jupyterlite-ai` site with AI commands
-    earlier than 0.4.
+    in AI commands). The native AI commands earlier than 0.4 (`jupyterlite-ai`)
+    are out of scope and are not tested.
   - Assert the tools through WebMCP itself, using Chrome DevTools or
     `chrome-devtools-mcp` `list_webmcp_tools` and `execute_webmcp_tool`, not
     only through logs. Native pages must show exactly the native tool set.
