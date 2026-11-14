@@ -43,6 +43,13 @@ export interface ITabStatus {
 export interface IStateResponse {
   enabled: boolean;
   status?: ITabStatus;
+  /** Statuses of embedded frames in the tab, from any origin. */
+  embedded: IEmbeddedStatus[];
+}
+
+/** The status of an embedded frame, keyed by its frame id within the tab. */
+export interface IEmbeddedStatus extends ITabStatus {
+  frameId: number;
 }
 
 /** Messages handled by the service worker. */

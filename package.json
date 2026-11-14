@@ -2,7 +2,7 @@
   "name": "jupyter-webmcp-extension",
   "version": "0.1.0",
   "description": "Chrome extension that adds jupyterlab-ai-commands and jupyter-webmcp to Jupyter pages at runtime",
-  "license": "BSD-3-Clause",
+  "license": "AGPL-3.0-only",
   "private": true,
   "type": "module",
   "scripts": {

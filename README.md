@@ -37,6 +37,7 @@ npm run build         # builds runtime/, then dist/
 ```
 
 Load `dist/` as an unpacked extension at `chrome://extensions` (developer mode).
+The project is licensed under AGPL-3.0-only (see [LICENSE](./LICENSE)).
 `dist/licenses/` holds the BSD-3-Clause license texts of the bundled upstream
 code; keep it in any package that is distributed.
 
@@ -87,13 +88,26 @@ Verified with the end-to-end scenario in Chrome for Testing 156 (see
 | JupyterLab 4.2.7 | Passed |
 | JupyterLab 4.4.10 | Passed |
 | JupyterLab 4.6.6 | Passed |
+| JupyterLite 0.6.4 (Pyodide kernel 0.6.1) | Passed |
+| JupyterLite 0.7.6 (Pyodide kernel 0.7.2) | Passed |
+| JupyterLite 0.8.7 | Passed |
+| Notebook 7.6.5 (`/lab`) | Passed |
+
+Also passed under a strict CSP (`script-src 'self' 'unsafe-eval'`, no
+`'unsafe-inline'`, no `chrome-extension:`) on JupyterLab 4.6.6. JupyterLab
+itself needs `'unsafe-eval'` (see [IMPLEMENTATION_PLAN.md](./IMPLEMENTATION_PLAN.md) §7).
 
 Type-checked (not run in a browser) against `@jupyterlab/*` 4.0.8 and 4.4.7
 typings, and against the lockfile versions. The type-only patches are listed in
 [runtime/src/vendor/SOURCES.json](./runtime/src/vendor/SOURCES.json).
 
-Not yet verified: JupyterLite 0.6 to 0.8, Notebook 7, and JupyterLab releases
-between the ones above. Treat them as unsupported until they pass the scenario.
+Not yet verified: Notebook 7.0.x, JupyterLite 0.4 and 0.5, and JupyterLab or
+JupyterLite releases later than those listed. Treat them as unsupported until
+they pass the scenario.
+
+Embedded frames: a same-origin iframe on an enabled site runs the runtime. A
+cross-origin iframe runs it only with `allow="tools"`, and only when the
+iframe's origin and every ancestor origin are enabled.
 
 ## Testing
 

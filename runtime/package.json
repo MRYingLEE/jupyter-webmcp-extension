@@ -2,7 +2,7 @@
   "name": "@jupyter-webmcp-extension/runtime",
   "version": "0.1.0",
   "description": "Runtime JupyterLab federated extension injected by the jupyter-webmcp-extension browser extension",
-  "license": "BSD-3-Clause",
+  "license": "AGPL-3.0-only",
   "private": true,
   "main": "lib/index.js",
   "types": "lib/index.d.ts",

@@ -3,14 +3,21 @@
  * and lets the user enable or disable the extension for the site.
  */
 
-import type { IStateResponse, ITabStatus } from '../shared/messages';
+import type { IEmbeddedStatus, IStateResponse, ITabStatus } from '../shared/messages';
 import { originPattern, webOrigin } from '../shared/origin';
+import type { IRuntimeStatus } from '../../runtime/src/channel';
 
 const originLabel = document.getElementById('origin') as HTMLElement;
 const message = document.getElementById('message') as HTMLElement;
 const toggle = document.getElementById('toggle') as HTMLButtonElement;
 const reload = document.getElementById('reload') as HTMLButtonElement;
 const statusList = document.getElementById('status') as HTMLElement;
+
+const COMPONENT_LABELS: Record<IRuntimeStatus['component'], string> = {
+  ai: 'AI commands',
+  webmcp: 'WebMCP',
+  runtime: 'Runtime'
+};
 
 let tabId: number | undefined;
 let origin: string | null = null;
@@ -21,24 +28,35 @@ function showMessage(text: string, error = false): void {
   message.hidden = false;
 }
 
-function renderStatus(status: ITabStatus | undefined): void {
-  statusList.replaceChildren();
-  const components = Object.entries(status?.components ?? {});
-  if (components.length === 0) {
-    const item = document.createElement('li');
-    item.className = 'muted';
-    item.textContent = 'No runtime status for this page yet.';
-    statusList.append(item);
-    return;
-  }
-  for (const [component, info] of components) {
+function appendComponents(
+  prefix: string,
+  status: ITabStatus | undefined
+): number {
+  let shown = 0;
+  for (const [component, info] of Object.entries(status?.components ?? {})) {
     if (!info) {
       continue;
     }
     const item = document.createElement('li');
     item.className = `state-${info.state}`;
-    const label = component === 'ai' ? 'AI commands' : 'WebMCP';
-    item.textContent = `${label}: ${info.state}${info.detail ? ` (${info.detail})` : ''}`;
+    const label = COMPONENT_LABELS[component as IRuntimeStatus['component']];
+    item.textContent = `${prefix}${label}: ${info.state}${info.detail ? ` (${info.detail})` : ''}`;
+    statusList.append(item);
+    shown += 1;
+  }
+  return shown;
+}
+
+function renderStatus(status: ITabStatus | undefined, embedded: IEmbeddedStatus[]): void {
+  statusList.replaceChildren();
+  const shown = appendComponents('', status);
+  for (const frame of embedded) {
+    appendComponents(`Embedded ${frame.origin}: `, frame);
+  }
+  if (shown === 0 && embedded.length === 0) {
+    const item = document.createElement('li');
+    item.className = 'muted';
+    item.textContent = 'No runtime status for this page yet.';
     statusList.append(item);
   }
 }
@@ -59,7 +77,7 @@ async function refresh(): Promise<void> {
     origin
   })) as IStateResponse;
   renderEnabled(response.enabled);
-  renderStatus(response.status);
+  renderStatus(response.status, response.embedded);
 }
 
 async function init(): Promise<void> {

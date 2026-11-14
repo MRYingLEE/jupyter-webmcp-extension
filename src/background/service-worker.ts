@@ -13,6 +13,7 @@ import type {
 import type { IRuntimeStatus } from '../../runtime/src/channel';
 
 const TAB_STATUS_KEY = 'tabStatus';
+const FRAME_STATUS_KEY = 'frameStatus';
 
 /** Stable registration ids, one per world and origin. */
 function scriptIds(origin: string): string[] {
@@ -42,7 +43,10 @@ async function unregisterOrigin(origin: string): Promise<void> {
   }
 }
 
-/** Register the MAIN-world hook and the ISOLATED bridge for an origin. */
+/**
+ * Register the MAIN-world hook and the ISOLATED bridge for an origin, in every
+ * frame. Embedded frames are gated by the `tools` permission in both scripts.
+ */
 async function registerOrigin(origin: string): Promise<void> {
   await unregisterOrigin(origin);
   const [mainId, bridgeId] = scriptIds(origin);
@@ -54,7 +58,7 @@ async function registerOrigin(origin: string): Promise<void> {
       js: ['content-main.js'],
       runAt: 'document_start',
       world: 'MAIN',
-      allFrames: false
+      allFrames: true
     },
     {
       id: bridgeId,
@@ -62,7 +66,7 @@ async function registerOrigin(origin: string): Promise<void> {
       js: ['content-bridge.js'],
       runAt: 'document_start',
       world: 'ISOLATED',
-      allFrames: false
+      allFrames: true
     }
   ]);
 }
@@ -119,14 +123,25 @@ async function writeTabStatuses(
   await chrome.storage.session.set({ [TAB_STATUS_KEY]: statuses });
 }
 
-async function recordStatus(
-  tabId: number,
+/** Embedded frame statuses, by tab id and then by frame id. */
+async function readFrameStatuses(): Promise<Record<string, Record<string, ITabStatus>>> {
+  const stored = await chrome.storage.session.get(FRAME_STATUS_KEY);
+  return (stored[FRAME_STATUS_KEY] as Record<string, Record<string, ITabStatus>>) ?? {};
+}
+
+async function writeFrameStatuses(
+  statuses: Record<string, Record<string, ITabStatus>>
+): Promise<void> {
+  await chrome.storage.session.set({ [FRAME_STATUS_KEY]: statuses });
+}
+
+/** The status of a frame after one component report, keeping its other components. */
+function withComponent(
+  current: ITabStatus | undefined,
   origin: string,
   documentId: string | undefined,
   status: IRuntimeStatus
-): Promise<void> {
-  const statuses = await readTabStatuses();
-  const current = statuses[tabId];
+): ITabStatus {
   const sameDocument =
     current?.origin === origin && current.documentId === documentId;
   const components = { ...(sameDocument ? current.components : {}) };
@@ -134,9 +149,29 @@ async function recordStatus(
     state: status.state,
     ...(status.detail === undefined ? {} : { detail: status.detail })
   };
-  statuses[tabId] = { origin, documentId, components, updated: Date.now() };
-  await writeTabStatuses(statuses);
-  await updateBadge(tabId, statuses[tabId]);
+  return { origin, documentId, components, updated: Date.now() };
+}
+
+async function recordStatus(
+  tabId: number,
+  frameId: number,
+  origin: string,
+  documentId: string | undefined,
+  status: IRuntimeStatus
+): Promise<void> {
+  if (frameId === 0) {
+    const statuses = await readTabStatuses();
+    statuses[tabId] = withComponent(statuses[tabId], origin, documentId, status);
+    await writeTabStatuses(statuses);
+  } else {
+    // An embedded frame is kept apart so it cannot replace the top frame's components.
+    const frames = await readFrameStatuses();
+    const tabFrames = frames[tabId] ?? {};
+    tabFrames[frameId] = withComponent(tabFrames[frameId], origin, documentId, status);
+    frames[tabId] = tabFrames;
+    await writeFrameStatuses(frames);
+  }
+  await updateBadge(tabId);
 }
 
 async function clearTab(tabId: number): Promise<void> {
@@ -145,11 +180,21 @@ async function clearTab(tabId: number): Promise<void> {
     delete statuses[tabId];
     await writeTabStatuses(statuses);
   }
+  const frames = await readFrameStatuses();
+  if (tabId in frames) {
+    delete frames[tabId];
+    await writeFrameStatuses(frames);
+  }
   await chrome.action.setBadgeText({ tabId, text: '' });
 }
 
-async function updateBadge(tabId: number, status: ITabStatus): Promise<void> {
-  const states = Object.values(status.components).map(item => item?.state);
+/** The badge shows the worst state across the top frame and its embedded frames. */
+async function updateBadge(tabId: number): Promise<void> {
+  const top = (await readTabStatuses())[tabId];
+  const frames = Object.values((await readFrameStatuses())[tabId] ?? {});
+  const states = [top, ...frames].flatMap(source =>
+    Object.values(source?.components ?? {}).map(info => info?.state)
+  );
   if (states.length === 0) {
     await chrome.action.setBadgeText({ tabId, text: '' });
     return;
@@ -187,7 +232,13 @@ async function handleMessage(
       const tabId = sender.tab?.id;
       const origin = webOrigin(sender.url);
       if (sender.id === chrome.runtime.id && tabId !== undefined && origin) {
-        await recordStatus(tabId, origin, sender.documentId, message.status);
+        await recordStatus(
+          tabId,
+          sender.frameId ?? 0,
+          origin,
+          sender.documentId,
+          message.status
+        );
       }
       return { ok: true };
     }
@@ -208,7 +259,14 @@ async function handleMessage(
       }
       const enabled = (await enabledOrigins()).includes(message.origin);
       const statuses = await readTabStatuses();
-      const response: IStateResponse = { enabled };
+      const frames = (await readFrameStatuses())[message.tabId] ?? {};
+      const response: IStateResponse = {
+        enabled,
+        embedded: Object.entries(frames).map(([frameId, status]) => ({
+          ...status,
+          frameId: Number(frameId)
+        }))
+      };
       const status = statuses[message.tabId];
       if (status?.origin === message.origin) {
         response.status = status;

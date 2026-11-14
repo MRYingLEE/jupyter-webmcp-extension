@@ -24,8 +24,11 @@ export const SETTINGS_CHANGED = 'jupyter-webmcp-extension:settings-changed';
 /** Dispatched by the runtime with a `{component, state, detail?}` JSON status. */
 export const STATUS_EVENT = 'jupyter-webmcp-extension:status';
 
-/** The components the runtime can provide. */
-export type RuntimeComponent = 'ai' | 'webmcp';
+/**
+ * The components the runtime can provide. `runtime` is the loading of the
+ * runtime itself, reported by the page hook when the runtime cannot be loaded.
+ */
+export type RuntimeComponent = 'ai' | 'webmcp' | 'runtime';
 
 /** The outcome of a component in the runtime. */
 export type RuntimeState = 'active' | 'failed';

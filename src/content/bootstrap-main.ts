@@ -13,8 +13,12 @@ import {
   parsePageConfig,
   RUNTIME_PACKAGE
 } from '../shared/config';
-import { RUNTIME_BASE_ATTRIBUTE } from '../../runtime/src/channel';
+import {
+  RUNTIME_BASE_ATTRIBUTE,
+  STATUS_EVENT
+} from '../../runtime/src/channel';
 import { decideInjection, injectRuntime, needsRuntime } from '../shared/decision';
+import { allowsTools, mayInjectRuntime } from '../shared/frame-policy';
 
 /** The state the hook keeps for one page. */
 interface IHookState {
@@ -22,6 +26,17 @@ interface IHookState {
   lastResult?: string;
   entryUrl?: string;
   entryLoad?: string;
+  /** The absolute URL the page was asked to load the runtime from. */
+  requestedSrc?: string;
+  /** Whether the request was mapped to the extension's copy. */
+  granted?: boolean;
+}
+
+/** What the hook needs to know about the frame it runs in. */
+interface IHookEnv {
+  load: string;
+  toolsAllowed: boolean;
+  report: (detail: string) => void;
 }
 
 /**
@@ -38,6 +53,36 @@ export function installPageHook(target: Window, load: string): void {
     HTMLScriptElement: typeof HTMLScriptElement;
     Element: typeof Element;
   };
+  const env: IHookEnv = {
+    load,
+    toolsAllowed: mayInjectRuntime({
+      isTop: target.top === target,
+      allowsTools: allowsTools(doc)
+    }),
+    report: detail => reportRuntimeFailure(doc, detail)
+  };
+
+  // A failed load of the runtime entry, from the extension or from the server,
+  // is reported so the popup and badge show it.
+  target.addEventListener(
+    'error',
+    event => {
+      const element = event.target;
+      if (
+        !(element instanceof views.HTMLScriptElement) ||
+        state.requestedSrc === undefined ||
+        element.src !== state.requestedSrc
+      ) {
+        return;
+      }
+      env.report(
+        state.granted
+          ? 'Runtime script failed to load.'
+          : 'Runtime is not enabled for this frame.'
+      );
+    },
+    true
+  );
 
   // Chrome defines `textContent` on HTMLScriptElement.prototype itself, which
   // shadows the one on Node.prototype, so the hook wraps the script's own
@@ -61,7 +106,7 @@ export function installPageHook(target: Window, load: string): void {
       ) {
         return text;
       }
-      return rewriteConfigText(text, load, state);
+      return rewriteConfigText(text, env, state);
     }
   });
 
@@ -92,7 +137,7 @@ export function installPageHook(target: Window, load: string): void {
 /**
  * Return the configuration text with the runtime added, when it is needed.
  */
-function rewriteConfigText(text: string, load: string, state: IHookState): string {
+function rewriteConfigText(text: string, env: IHookEnv, state: IHookState): string {
   if (state.lastText === text && state.lastResult !== undefined) {
     return state.lastResult;
   }
@@ -101,10 +146,14 @@ function rewriteConfigText(text: string, load: string, state: IHookState): strin
   if (config) {
     const decision = decideInjection(config);
     if (needsRuntime(decision)) {
-      const injected = injectRuntime(config, decision, load);
-      result = JSON.stringify(injected);
-      state.entryUrl = federatedEntryUrl(config, RUNTIME_PACKAGE, load);
-      state.entryLoad = load;
+      if (env.toolsAllowed) {
+        const injected = injectRuntime(config, decision, env.load);
+        result = JSON.stringify(injected);
+        state.entryUrl = federatedEntryUrl(config, RUNTIME_PACKAGE, env.load);
+        state.entryLoad = env.load;
+      } else {
+        env.report('The embedding frame does not allow the tools permission.');
+      }
     }
   }
   state.lastText = text;
@@ -116,11 +165,11 @@ function rewriteConfigText(text: string, load: string, state: IHookState): strin
  * Map the runtime entry URL to the extension copy, and leave other URLs alone.
  *
  * The extension base is read from the document attribute set by the isolated
- * bridge, because the MAIN world cannot call the extension APIs.
+ * bridge, because the MAIN world cannot call the extension APIs. Without the
+ * base, the entry is left unmapped and its load fails, which is reported.
  */
 function mapScriptUrl(value: string, doc: Document, state: IHookState): string {
-  const base = doc.documentElement?.getAttribute(RUNTIME_BASE_ATTRIBUTE);
-  if (!base || !state.entryUrl) {
+  if (!state.entryUrl) {
     return value;
   }
   const resolved = new URL(value, doc.baseURI).href;
@@ -128,5 +177,18 @@ function mapScriptUrl(value: string, doc: Document, state: IHookState): string {
   if (resolved !== entry) {
     return value;
   }
-  return `${base}${state.entryLoad}`;
+  const base = doc.documentElement?.getAttribute(RUNTIME_BASE_ATTRIBUTE);
+  state.granted = Boolean(base);
+  const mapped = base ? `${base}${state.entryLoad}` : value;
+  state.requestedSrc = new URL(mapped, doc.baseURI).href;
+  return mapped;
+}
+
+/** Report that the runtime could not be provided to this frame. */
+function reportRuntimeFailure(doc: Document, detail: string): void {
+  doc.dispatchEvent(
+    new CustomEvent(STATUS_EVENT, {
+      detail: JSON.stringify({ component: 'runtime', state: 'failed', detail })
+    })
+  );
 }

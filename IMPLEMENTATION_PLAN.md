@@ -276,8 +276,15 @@ Rules:
 - Package all code locally and reproducibly from pinned sources. Do not use
   remote code, `eval`, or user scripts. Preserve the BSD-3-Clause notices
   of both Jupyter projects, and the Apache-2.0 notice if any
-  `webmcp-tool-overrides` code is reused. Audit the licenses of bundled
-  dependencies.
+  `webmcp-tool-overrides` code is reused. The project is AGPL-3.0-only (see
+  `LICENSE`).
+- **Bundle license audit (observed):** the lockfiles are not enough, so the
+  built output was checked too. `dist/` and `runtime/labextension/` contain
+  no code from elkjs (EPL-2.0), dompurify (MPL/Apache), or mermaid, and no
+  EPL text, so `third-party-licenses.json` stays empty. Those packages are
+  reached only through `@jupyterlab/notebook` and the Notebook mermaid plugin,
+  which the runtime shares with the host. `dist/licenses/` contains the two
+  vendored BSD texts. Repeat this check on each release.
 
 ## 7. Delivery phases
 
@@ -293,6 +300,26 @@ Rules:
    Record the behavior under CSP, including a strict `script-src`
    configuration. If a host variant fails, mark it as unsupported, with a
    diagnostic.
+
+   **Result (observed; scratch spike copy, not this repository):**
+   - (a) config edit before read, (b) URL map with chunks, and (d) missing
+     runtime pass on JupyterLab 4.0.0 and 4.6.6, JupyterLite 0.6.4 and 0.8.7,
+     and the Notebook 7.6.5 notebook page. (d) on the Notebook 7 `/tree` file
+     browser shows an error that also occurs without the extension.
+   - (c) host commands and `instanceof NotebookPanel` pass on those hosts. The
+     check fails on Notebook 7 `/tree`, which opens no notebook, so it does not
+     apply to that page.
+   - `window.jupyterapp === app` was false on every host, and the reason is not
+     known. Host identity therefore rests on the `@lumino/commands` `instanceof`
+     check and the registry contents.
+   - The spike logged status-0 requests for a `chrome-extension://` origin with
+     a UUID that does not match the extension ID. The resources still loaded
+     with status 200. This is not investigated.
+   - CSP: `script-src 'self'` alone breaks JupyterLab 4.6.6 itself (an inline
+     script is blocked, and `@jupyterlab/apputils-extension:settings` throws an
+     `EvalError`). With `script-src 'self' 'unsafe-eval'`, the shell renders,
+     and the runtime loads with its tools. The earlier "strict" host (port
+     8892, `'unsafe-inline' 'unsafe-eval' blob:`) was not strict.
 2. **Skeleton:** the manifest, optional permissions, dynamic script
    registration, the bridge, the popup, the build pipeline that vendors the
    runtime, and lint and unit-test setup.
@@ -337,10 +364,44 @@ Rules:
   9. A blocked command through `execute_command`
   10. A dialog through `answer_dialog`
   11. A long call through `wait_for_result`
-- **Negative cases:** WebMCP disabled; site not enabled; a non-Jupyter page;
-  a strict CSP; a missing runtime file; an extension reload during a session;
-  multiple tabs; and an iframe-embedded Jupyter without `allow="tools"`. Each
-  must fail visibly and leave the page usable.
+- **Negative cases (observed):** `scripts/e2e.mjs` covers these on JupyterLab
+  4.0.0, 4.2.7, 4.4.10 and 4.6.6, JupyterLite 0.6.4, 0.7.6 and 0.8.7, and
+  Notebook 7.6.5 (Chrome for Testing 156). Run 5 passed on the seven hosts
+  listed in §8 Observed, with the iframe, two-tab, reload and missing-runtime
+  checks. The strict-CSP and Notebook 7 checks ran separately, as described
+  below:
+  - WebMCP disabled or unsupported, site not enabled, and a non-Jupyter page
+    (`/api/status`): no runtime status and no tools.
+  - Two tabs and a page reload: the runtime is active in each.
+  - Missing runtime file: JupyterLab still renders, and a failed `runtime`
+    status is recorded. The popup shows it and the toolbar badge shows `!`.
+    The popup was not checked visually.
+  - Strict CSP: a local proxy serves JupyterLab 4.6.6 with
+    `script-src 'self' 'unsafe-eval'`, with no `'unsafe-inline'` and no
+    `chrome-extension:`. The check asserts both, and the runtime is active
+    with its tools present. `'unsafe-eval'` is required by JupyterLab itself
+    (§7).
+  - Iframes: a cross-origin Lite iframe, served from a loopback parent, fails
+    visibly without `allow="tools"` ("The embedding frame does not allow the
+    tools permission"). It also fails when the parent origin is not enabled
+    ("Runtime is not enabled for this frame."). A same-origin iframe runs the
+    runtime with or without `allow`, because Chrome's default feature policy
+    allows tools for same-origin frames. This differs from the earlier wording
+    of this item, and §9 records it as a decision.
+  - Not covered: an extension reload during a session. Playwright's
+    persistent context unloads the extension on reload, so only page reload is
+    tested. A cross-origin JupyterLab cannot be framed without changing its
+    `frame-ancestors` header, so only Lite is tested as the cross-origin child.
+- **Observed (this change):** each injected host lists 21 tools: the five
+  built-ins (`get_context`, `list_all_commands`, `execute_command`,
+  `answer_dialog`, `wait_for_result`) and 16 default AI-command tools. The
+  harness asserts the built-in names on every host. The full run (run 5)
+  passed on JupyterLab 4.0.0, 4.2.7, 4.4.10 and 4.6.6, and on JupyterLite
+  0.6.4 (`jupyterlite-core==0.6.4` with `jupyterlite-pyodide-kernel==0.6.1`,
+  because no 0.6.4 kernel exists), 0.7.6 (kernel 0.7.2) and 0.8.7. A later
+  run passed on Notebook 7.6.5 at `/lab` (`/tree` is the file browser, which
+  opens no notebook, so it is not a test host). Not yet run: Notebook 7.0.x,
+  JupyterLite 0.4 and 0.5, and releases later than those listed.
 
 ## 9. Risks and open questions
 
@@ -353,8 +414,49 @@ Rules:
 | Upstream drift | Pin versions, use Renovate-style update pull requests that rerun the matrix, and track upstream issues (`frontends.md`, "Upstream issues") |
 | Older Lite runtimes (0.6, 0.7) behave differently from 0.8, for example in Pyodide kernel interrupts and restarts, kernel listing, or browser-storage contents | Run the end-to-end scenario on each Lite line. Treat differences as known limitations, not as reasons to drop the version, unless core tools fail |
 | Hub or proxy URL layouts (`/user/<name>/lab`) | Derive everything from `fullLabextensionsUrl` and never hard-code paths |
+| Same-origin iframe runs the runtime without `allow="tools"`. The `allFrames` registration also makes this a behavior change | Chrome's default feature policy allows same-origin frames, and the `allow` gate applies to cross-origin frames only. Decide whether to require `allow` for every embedded frame |
+| Failures are visible only in the popup and on the toolbar badge, not on the page | Keep the badge (`!`) and the popup status. Add an in-page notice only if silent failure is unacceptable |
+| The embedded grant is async (`chrome.storage.local`), so a late grant can miss the injection | The frame fails closed with "Runtime is not enabled for this frame." A page reload retries. Not tested under real timing |
+| Removed iframes leave their status entries until the tab closes or is cleared | Document it. Frame-keyed status is cleared with the tab |
+| A same-origin subframe's tools appear on the top document | Observed: the parent lists 0 tools without the subframe and 21 with it. This stays within one origin |
+| JupyterLab 4.6.6 needs `'unsafe-eval'` under a strict CSP | Its settings plugin evaluates code, so `script-src 'self'` alone breaks the host. The extension cannot work around this without weakening the page CSP |
 
 Open questions to settle in the spike: the URL-mapping method (script hook or
 `declarativeNetRequest`); one runtime artifact or per-range artifacts; and
 whether to upstream an optional settings fallback to `jupyter-webmcp` so that
 the adapter becomes unnecessary.
+
+### Pending issues
+
+These items are not verified. Each one is a gap, not a known failure.
+
+1. **Spike not run as a separate plugin in this repository.** The §7 spike ran
+   in a scratch copy. The repository has no spike plugin.
+2. **Extension reload during a session is untested.** Playwright's persistent
+   context unloads the extension on reload. Only page reload is tested.
+3. **Popup and badge are not checked visually.** The `!` badge and the failure
+   text in the popup are only checked through status data.
+4. **Hosts not run:** Notebook 7.0.x, JupyterLite 0.4 and 0.5, and JupyterLab
+   and JupyterLite releases later than those listed in §8.
+5. **Notebook 7 `/tree` fails spike check (c).** `/tree` is the file browser and
+   opens no notebook, so the check may not apply. The harness has no notebook
+   page check for Notebook 7 beyond `/lab`.
+6. **Cross-origin JupyterLab child is untested.** Its `frame-ancestors` header
+   cannot be changed, so only Lite is tested as the cross-origin child (§8).
+7. **Strict CSP is tested on one host only.** The check ran on JupyterLab 4.6.6
+   through a local proxy with `script-src 'self' 'unsafe-eval'`. It was not run
+   on other versions or on a real server with a strict policy.
+8. **Embedded grant race is untested under real timing** (see the grant risk in
+   this section).
+9. **`window.jupyterapp === app` is false on every host.** The reason is not
+   known. Host identity rests on the `@lumino/commands` `instanceof` check and
+   the registry contents.
+10. **Status-0 requests from the spike are not investigated.** They were for a
+    `chrome-extension://` origin whose UUID did not match the extension ID. The
+    resources still loaded with status 200.
+11. **Federation warnings on JupyterLab 4.0.0.** Shared-singleton version
+    mismatches are logged, but they do not block loading. The cause and any
+    effect on the shared singletons are not analysed.
+12. **Embedded-frame policy is not confirmed.** Whether the ancestor-enabled rule
+    matches the intent, and whether badge-only failure visibility is enough, are
+    open decisions (see the risk rows above).

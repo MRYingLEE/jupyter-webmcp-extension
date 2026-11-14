@@ -15,8 +15,9 @@ import {
   IRuntimeStatus
 } from '../../runtime/src/channel';
 import { isRecord } from '../shared/config';
+import { allowsTools, mayGrantRuntime } from '../shared/frame-policy';
+import { ENABLED_ORIGINS_KEY, SETTINGS_STORAGE_KEY } from '../shared/storage';
 import { ExtensionMessage } from '../shared/messages';
-import { SETTINGS_STORAGE_KEY } from '../shared/storage';
 
 const runtimeBase = chrome.runtime.getURL('runtime/');
 
@@ -29,7 +30,10 @@ function setRuntimeBase(): boolean {
   return true;
 }
 
-if (!setRuntimeBase()) {
+function grantRuntime(): void {
+  if (setRuntimeBase()) {
+    return;
+  }
   const observer = new MutationObserver(() => {
     if (setRuntimeBase()) {
       observer.disconnect();
@@ -37,6 +41,34 @@ if (!setRuntimeBase()) {
   });
   observer.observe(document, { childList: true, subtree: true });
 }
+
+async function frameMayBeGranted(): Promise<boolean> {
+  const stored = await chrome.storage.local.get(ENABLED_ORIGINS_KEY);
+  const value = stored[ENABLED_ORIGINS_KEY];
+  const enabledOrigins = Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === 'string')
+    : [];
+  return mayGrantRuntime({
+    isTop: false,
+    allowsTools: allowsTools(document),
+    origin: location.origin,
+    ancestorOrigins: Array.from(location.ancestorOrigins),
+    enabledOrigins
+  });
+}
+
+if (window.top === window) {
+  grantRuntime();
+} else {
+  // Embedded frames are granted only after the storage check. Until then the
+  // base is absent, so the runtime entry is not mapped and does not load.
+  void frameMayBeGranted().then(allowed => {
+    if (allowed) {
+      grantRuntime();
+    }
+  });
+}
+
 
 async function readSettings(): Promise<unknown> {
   const stored = await chrome.storage.local.get(SETTINGS_STORAGE_KEY);
@@ -99,7 +131,7 @@ function parseStatus(detail: unknown): IRuntimeStatus | null {
     return null;
   }
   const { component, state } = parsed;
-  if (component !== 'ai' && component !== 'webmcp') {
+  if (component !== 'ai' && component !== 'webmcp' && component !== 'runtime') {
     return null;
   }
   if (state !== 'active' && state !== 'failed') {
