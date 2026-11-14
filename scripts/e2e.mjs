@@ -82,6 +82,50 @@ async function waitForStatus(worker, origin) {
   }
 }
 
+const REQUIRED_TOOLS = [
+  'get_context',
+  'create_notebook',
+  'add_cell',
+  'read_notebook',
+  'run_cell',
+  'save_notebook',
+  'read_file',
+  'write_file',
+  'run_code',
+  'interrupt_kernel',
+  'restart_kernel',
+  'execute_command',
+  'answer_dialog',
+  'wait_for_result'
+];
+
+async function checkTools(page, base) {
+  const names = await page.evaluate(async () => (await document.modelContext.getTools()).map(tool => tool.name));
+  for (const name of REQUIRED_TOOLS) {
+    assert.ok(names.includes(name), `${base}: missing tool ${name}`);
+  }
+
+  // Unique name so repeated runs on a shared server root do not collide.
+  const notebookName = `jwe-e2e-${Date.now()}`;
+  const notebookPath = `${notebookName}.ipynb`;
+  const call = async (name, input) => {
+    const text = await page.evaluate(async ([toolName, toolInput]) => {
+      const tool = (await document.modelContext.getTools()).find(item => item.name === toolName);
+      const result = await document.modelContext.executeTool(tool, toolInput);
+      return typeof result === 'string' ? result : JSON.stringify(result);
+    }, [name, input]);
+    const parsed = JSON.parse(text);
+    assert.equal(parsed.success, true, `${base}: ${name} failed: ${text}`);
+    return parsed;
+  };
+
+  await call('create_notebook', { name: notebookName });
+  const { cellId } = await call('add_cell', { notebookPath, content: 'print(1+1)', cellType: 'code' });
+  const run = await call('run_cell', { notebookPath, cellId });
+  assert.equal(run.status, 'ok', `${base}: run_cell status`);
+  assert.match(JSON.stringify(run.outputs), /2/, `${base}: run_cell output`);
+}
+
 async function checkPage(context, worker, extensionId, base, { webmcpFlag }) {
   await enable(context, extensionId, base);
   const page = await context.newPage();
@@ -106,6 +150,9 @@ async function checkPage(context, worker, extensionId, base, { webmcpFlag }) {
   assert.ok(dom.base?.startsWith('chrome-extension://') && dom.base.endsWith('/runtime/'), `${base}: runtime base not set`);
   assert.ok(dom.labShell, `${base}: JupyterLab shell not rendered`);
   assert.equal(dom.modelContext, webmcpFlag ? 'object' : 'undefined', `${base}: modelContext`);
+  if (webmcpFlag) {
+    await checkTools(page, base);
+  }
   await page.close();
   console.log(`ok ${base} (webmcp ${webmcpFlag ? 'enabled' : 'unsupported'})`);
 }
