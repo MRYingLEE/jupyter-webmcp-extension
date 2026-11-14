@@ -1,0 +1,55 @@
+{
+  "name": "@jupyter-webmcp-extension/runtime",
+  "version": "0.1.0",
+  "description": "Runtime JupyterLab federated extension injected by the jupyter-webmcp-extension browser extension",
+  "license": "BSD-3-Clause",
+  "private": true,
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "files": [
+    "lib/**/*.{d.ts,js,js.map}",
+    "src/**/*.ts",
+    "src/vendor/**/*.json",
+    "src/vendor/**/LICENSE"
+  ],
+  "scripts": {
+    "build": "npm run build:lib && jupyter-builder build --development False .",
+    "build:dev": "npm run build:lib && jupyter-builder build --development True .",
+    "build:lib": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@jupyter/ydoc": "^3.1.0 || ^4.0.0",
+    "@jupyterlab/application": "^4.0.0",
+    "@jupyterlab/apputils": "^4.0.0",
+    "@jupyterlab/cells": "^4.0.0",
+    "@jupyterlab/coreutils": "^6.0.0",
+    "@jupyterlab/docmanager": "^4.0.0",
+    "@jupyterlab/docregistry": "^4.0.0",
+    "@jupyterlab/fileeditor": "^4.0.0",
+    "@jupyterlab/filebrowser": "^4.0.0",
+    "@jupyterlab/notebook": "^4.0.0",
+    "@jupyterlab/services": "^7.0.0",
+    "@jupyterlab/settingregistry": "^4.0.0",
+    "@jupyterlab/statusbar": "^4.0.0",
+    "@jupyterlab/translation": "^4.0.0",
+    "@lumino/commands": "^2.0.0",
+    "@lumino/coreutils": "^2.0.0",
+    "@lumino/disposable": "^2.0.0",
+    "@lumino/messaging": "^2.0.0",
+    "@lumino/signaling": "^2.0.0",
+    "@lumino/widgets": "^2.0.0"
+  },
+  "devDependencies": {
+    "@jupyter/builder": "^1.2.2",
+    "typescript": "~5.5.4"
+  },
+  "sideEffects": [],
+  "publishConfig": {
+    "access": "public"
+  },
+  "jupyterlab": {
+    "extension": true,
+    "outputDir": "labextension"
+  }
+}

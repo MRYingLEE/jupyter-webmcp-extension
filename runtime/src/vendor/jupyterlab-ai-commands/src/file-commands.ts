@@ -1,0 +1,731 @@
+import { PathExt } from '@jupyterlab/coreutils';
+import { IDocumentManager } from '@jupyterlab/docmanager';
+import {
+  Context,
+  DocumentRegistry,
+  DocumentWidget,
+  IDocumentWidget
+} from '@jupyterlab/docregistry';
+import { IEditorTracker } from '@jupyterlab/fileeditor';
+import { ServiceManager } from '@jupyterlab/services';
+import { CommandRegistry } from '@lumino/commands';
+
+/**
+ * Command IDs for diff management (from jupyterlab-diff)
+ */
+const UNIFIED_FILE_DIFF_COMMAND_ID = 'jupyterlab-diff:unified-file-diff';
+const BACKGROUND_DESCRIPTION =
+  'Whether to avoid activating the document widget so as not to disturb the user (default: true)';
+
+/**
+ * Helper function to get a document widget by path or use the active one
+ */
+async function getDocumentWidget(
+  filepath: string,
+  docManager: IDocumentManager,
+  background?: boolean,
+  createWidget = true
+): Promise<DocumentWidget | null> {
+  let widget = docManager.findWidget(filepath);
+  if (!widget && createWidget) {
+    widget = docManager.openOrReveal(filepath, undefined, undefined, {
+      activate: !(background ?? true)
+    });
+  }
+
+  if (!(widget instanceof DocumentWidget) && createWidget) {
+    throw new Error(`Widget for ${filepath} is not a document widget`);
+  }
+  await widget?.context.ready;
+
+  return (widget as DocumentWidget) ?? null;
+}
+
+/**
+ * Helper function to get a document context without widget
+ */
+async function getDocumentContext(
+  docManager: IDocumentManager,
+  manager: ServiceManager.IManager,
+  path: string
+): Promise<DocumentRegistry.IContext<DocumentRegistry.IModel> | null> {
+  const { registry } = docManager;
+  const modelName = registry.defaultWidgetFactory(path).modelName;
+  if (!modelName) {
+    return null;
+  }
+  const factory = registry.getModelFactory(modelName);
+  if (!factory) {
+    return null;
+  }
+  const context = new Context({ manager, factory, path });
+  await context.initialize(false);
+  await context.ready;
+  return context;
+}
+
+/**
+ * Create a new file of specified type (text, python, markdown, json, etc.)
+ */
+function registerCreateFileCommand(
+  commands: CommandRegistry,
+  docManager: IDocumentManager
+): void {
+  const command = {
+    id: 'jupyterlab-ai-commands:create-file',
+    label: 'Create File',
+    caption: 'Create a new file of specified type',
+    describedBy: {
+      args: {
+        type: 'object',
+        properties: {
+          fileName: {
+            type: 'string',
+            description: 'Name of the file to create'
+          },
+          fileType: {
+            type: 'string',
+            description:
+              'Registered JupyterLab file type to create. Common examples: text, python, markdown, json, javascript, typescript, yaml, julia, r, csv'
+          },
+          content: {
+            type: 'string',
+            description: 'Initial content for the file (optional)'
+          },
+          cwd: {
+            type: 'string',
+            description: 'Directory where to create the file (optional)'
+          },
+          background: {
+            type: 'boolean',
+            description: BACKGROUND_DESCRIPTION
+          }
+        },
+        required: ['fileName']
+      }
+    },
+    execute: async (args: any) => {
+      const {
+        fileName,
+        cwd,
+        background,
+        content = '',
+        fileType = 'text'
+      } = args;
+
+      const registeredFileType = docManager.registry.getFileType(fileType);
+      if (!registeredFileType) {
+        throw new Error(`Unknown file type: '${fileType}'`);
+      }
+
+      const ext = registeredFileType.extensions[0];
+      if (!ext) {
+        throw new Error(
+          `File type '${registeredFileType.name}' does not define a default extension`
+        );
+      }
+
+      const existingExt = PathExt.extname(fileName);
+      const fullFileName = existingExt ? fileName : `${fileName}${ext}`;
+
+      const fullPath = cwd ? `${cwd}/${fullFileName}` : fullFileName;
+
+      const model = await docManager.services.contents.newUntitled({
+        path: cwd || '',
+        type: 'file',
+        ext
+      });
+
+      let finalPath = model.path;
+      if (model.name !== fullFileName) {
+        const renamed = await docManager.services.contents.rename(
+          model.path,
+          fullPath
+        );
+        finalPath = renamed.path;
+      }
+
+      if (content) {
+        await docManager.services.contents.save(finalPath, {
+          type: 'file',
+          format: 'text',
+          content
+        });
+      }
+
+      let opened = false;
+      if (await getDocumentWidget(finalPath, docManager, background)) {
+        opened = true;
+      }
+
+      return {
+        success: true,
+        message: `${registeredFileType.name} file '${fullFileName}' created and opened successfully`,
+        fileName: fullFileName,
+        filePath: finalPath,
+        fileType: registeredFileType.name,
+        hasContent: !!content,
+        opened
+      };
+    }
+  };
+
+  commands.addCommand(command.id, command);
+}
+
+/**
+ * Open a file in the editor
+ */
+function registerOpenFileCommand(
+  commands: CommandRegistry,
+  docManager: IDocumentManager
+): void {
+  const command = {
+    id: 'jupyterlab-ai-commands:open-file',
+    label: 'Open File',
+    caption: 'Open a file in the editor',
+    describedBy: {
+      args: {
+        type: 'object',
+        properties: {
+          filePath: {
+            type: 'string',
+            description: 'Path to the file to open'
+          },
+          background: {
+            type: 'boolean',
+            description: BACKGROUND_DESCRIPTION
+          }
+        },
+        required: ['filePath']
+      }
+    },
+    execute: async (args: any) => {
+      const { filePath, background } = args;
+
+      // Check that the file exists before trying to open it
+      try {
+        await docManager.services.contents.get(filePath, { content: false });
+      } catch {
+        throw new Error(`File not found: ${filePath}`);
+      }
+
+      const widget = await getDocumentWidget(filePath, docManager, background);
+
+      if (!widget) {
+        throw new Error(`Could not open file: ${filePath}`);
+      }
+
+      return {
+        success: true,
+        message: `File '${filePath}' opened successfully`,
+        filePath,
+        widgetId: widget.id
+      };
+    }
+  };
+
+  commands.addCommand(command.id, command);
+}
+
+/**
+ * Delete a file from the file system
+ */
+function registerDeleteFileCommand(
+  commands: CommandRegistry,
+  docManager: IDocumentManager
+): void {
+  const command = {
+    id: 'jupyterlab-ai-commands:delete-file',
+    label: 'Delete File',
+    caption: 'Delete a file from the file system',
+    describedBy: {
+      args: {
+        type: 'object',
+        properties: {
+          filePath: {
+            type: 'string',
+            description: 'Path to the file to delete'
+          }
+        },
+        required: ['filePath']
+      }
+    },
+    execute: async (args: any) => {
+      const { filePath } = args;
+
+      await docManager.services.contents.delete(filePath);
+
+      return {
+        success: true,
+        message: `File '${filePath}' deleted successfully`,
+        filePath
+      };
+    }
+  };
+
+  commands.addCommand(command.id, command);
+}
+
+/**
+ * Rename a file or move it to a different location
+ */
+function registerRenameFileCommand(
+  commands: CommandRegistry,
+  docManager: IDocumentManager
+): void {
+  const command = {
+    id: 'jupyterlab-ai-commands:rename-file',
+    label: 'Rename File',
+    caption: 'Rename a file or move it to a different location',
+    describedBy: {
+      args: {
+        type: 'object',
+        properties: {
+          oldPath: {
+            type: 'string',
+            description: 'Current path of the file'
+          },
+          newPath: {
+            type: 'string',
+            description: 'New path or name for the file'
+          }
+        },
+        required: ['oldPath', 'newPath']
+      }
+    },
+    execute: async (args: any) => {
+      const { oldPath, newPath } = args;
+
+      await docManager.services.contents.rename(oldPath, newPath);
+
+      return {
+        success: true,
+        message: `File renamed from '${oldPath}' to '${newPath}' successfully`,
+        oldPath,
+        newPath
+      };
+    }
+  };
+
+  commands.addCommand(command.id, command);
+}
+
+/**
+ * Copy a file to a new location
+ */
+function registerCopyFileCommand(
+  commands: CommandRegistry,
+  docManager: IDocumentManager
+): void {
+  const command = {
+    id: 'jupyterlab-ai-commands:copy-file',
+    label: 'Copy File',
+    caption: 'Copy a file to a new location',
+    describedBy: {
+      args: {
+        type: 'object',
+        properties: {
+          sourcePath: {
+            type: 'string',
+            description: 'Path of the file to copy'
+          },
+          destinationPath: {
+            type: 'string',
+            description: 'Exact destination path for the copied file'
+          }
+        },
+        required: ['sourcePath', 'destinationPath']
+      }
+    },
+    execute: async (args: any) => {
+      const { sourcePath, destinationPath } = args;
+
+      const destinationDir = PathExt.dirname(destinationPath);
+      const copied = await docManager.services.contents.copy(
+        sourcePath,
+        destinationDir
+      );
+
+      let finalPath = copied.path;
+      if (copied.path !== destinationPath) {
+        const renamed = await docManager.services.contents.rename(
+          copied.path,
+          destinationPath
+        );
+        finalPath = renamed.path;
+      }
+
+      return {
+        success: true,
+        message: `File copied from '${sourcePath}' to '${finalPath}' successfully`,
+        sourcePath,
+        destinationPath: finalPath
+      };
+    }
+  };
+
+  commands.addCommand(command.id, command);
+}
+
+/**
+ * Navigate to a specific directory in the file browser
+ */
+function registerNavigateToDirectoryCommand(commands: CommandRegistry): void {
+  const command = {
+    id: 'jupyterlab-ai-commands:navigate-to-directory',
+    label: 'Navigate to Directory',
+    caption: 'Navigate to a specific directory in the file browser',
+    describedBy: {
+      args: {
+        type: 'object',
+        properties: {
+          path: {
+            type: 'string',
+            description: 'Path to the directory to navigate to'
+          }
+        },
+        required: ['path']
+      }
+    },
+    execute: async (args: any) => {
+      const { path } = args;
+
+      await commands.execute('filebrowser:go-to-path', {
+        path
+      });
+
+      return {
+        success: true,
+        message: `Navigated to directory '${path}' successfully`,
+        path
+      };
+    }
+  };
+
+  commands.addCommand(command.id, command);
+}
+
+/**
+ * List files and directories in a specific directory
+ */
+function registerListDirectoryCommand(
+  commands: CommandRegistry,
+  docManager: IDocumentManager
+): void {
+  const command = {
+    id: 'jupyterlab-ai-commands:list-directory',
+    label: 'List Directory',
+    caption: 'List files and directories in a specific directory',
+    describedBy: {
+      args: {
+        type: 'object',
+        properties: {
+          path: {
+            type: 'string',
+            description:
+              'Path to the directory to list. If not provided, lists the root directory'
+          },
+          includeHidden: {
+            type: 'boolean',
+            description: 'Whether to include hidden files (default: false)'
+          }
+        }
+      }
+    },
+    execute: async (args: any) => {
+      const { path = '', includeHidden = false } = args;
+
+      const contents = await docManager.services.contents.get(path, {
+        content: true
+      });
+
+      if (contents.type !== 'directory') {
+        throw new Error(`Path '${path}' is not a directory`);
+      }
+
+      const items = contents.content || [];
+      const filteredItems = includeHidden
+        ? items
+        : items.filter((item: any) => !item.name.startsWith('.'));
+
+      const formattedItems = filteredItems.map((item: any) => ({
+        name: item.name,
+        path: item.path,
+        type: item.type,
+        size: item.size || 0,
+        created: item.created,
+        lastModified: item.last_modified,
+        mimetype: item.mimetype || null,
+        format: item.format || null
+      }));
+
+      const directories = formattedItems.filter(
+        (item: any) => item.type === 'directory'
+      );
+      const files = formattedItems.filter(
+        (item: any) => item.type !== 'directory'
+      );
+
+      return {
+        success: true,
+        message: `Listed ${formattedItems.length} items in directory '${path || '/'}'`,
+        path: path || '/',
+        totalItems: formattedItems.length,
+        directories: directories.length,
+        files: files.length,
+        items: formattedItems,
+        includeHidden
+      };
+    }
+  };
+
+  commands.addCommand(command.id, command);
+}
+
+/**
+ * Get information about a file including its path, name, extension, and content
+ */
+function registerGetFileInfoCommand(
+  commands: CommandRegistry,
+  docManager: IDocumentManager,
+  editorTracker?: IEditorTracker,
+  serviceManager?: ServiceManager.IManager
+): void {
+  const command = {
+    id: 'jupyterlab-ai-commands:get-file-info',
+    label: 'Get File Info',
+    caption: 'Get information about a file including its content',
+    describedBy: {
+      args: {
+        type: 'object',
+        properties: {
+          filePath: {
+            type: 'string',
+            description:
+              'Path to the file to read. If not provided, uses the currently active file in the editor.'
+          },
+          background: {
+            type: 'boolean',
+            description: BACKGROUND_DESCRIPTION
+          },
+          createWidget: {
+            type: 'boolean',
+            description:
+              'Whether to open the document widget if it is not opened. Default to false to avoid unnecessary disruption'
+          }
+        }
+      }
+    },
+    execute: async (args: any) => {
+      const { filePath, background, createWidget } = args;
+
+      let widget: IDocumentWidget | null = null;
+      let context: DocumentRegistry.IContext<DocumentRegistry.IModel> | null =
+        null;
+
+      if (filePath) {
+        widget = await getDocumentWidget(
+          filePath,
+          docManager,
+          background,
+          (createWidget ?? false) || !serviceManager
+        );
+        context = widget?.context ?? null;
+
+        if (!widget) {
+          if (createWidget) {
+            throw new Error(`Failed to open file at path: ${filePath}`);
+          } else if (serviceManager) {
+            context = await getDocumentContext(
+              docManager,
+              serviceManager,
+              filePath
+            );
+          } else {
+            throw new Error(
+              `Failed to get the content of ${filePath}, the service manager is not available`
+            );
+          }
+        }
+      } else {
+        widget = editorTracker?.currentWidget ?? null;
+        context = widget?.context ?? null;
+        if (!widget) {
+          throw new Error(
+            'No active file in the editor and no file path provided'
+          );
+        }
+      }
+
+      if (!context) {
+        throw new Error('Widget is not a document');
+      }
+
+      const model = context.model;
+
+      if (!model) {
+        throw new Error('File model not available');
+      }
+
+      const sharedModel = model.sharedModel;
+      const content = sharedModel.getSource();
+      const resolvedFilePath = widget?.context.path ?? filePath;
+      const fileName = widget?.title.label ?? PathExt.basename(filePath);
+      const fileExtension = PathExt.extname(resolvedFilePath) || 'unknown';
+      const isDirty = model.dirty;
+      const readOnly = model.readOnly;
+
+      if (!widget) {
+        context.dispose();
+      }
+
+      return {
+        success: true,
+        filePath: resolvedFilePath,
+        fileName,
+        fileExtension,
+        content,
+        isDirty,
+        readOnly,
+        widgetType: widget?.constructor.name
+      };
+    }
+  };
+
+  commands.addCommand(command.id, command);
+}
+
+/**
+ * Set or update the content of an existing file
+ */
+function registerSetFileContentCommand(
+  commands: CommandRegistry,
+  docManager: IDocumentManager
+): void {
+  const command = {
+    id: 'jupyterlab-ai-commands:set-file-content',
+    label: 'Set File Content',
+    caption: 'Set or update the content of an existing file',
+    describedBy: {
+      args: {
+        type: 'object',
+        properties: {
+          filePath: {
+            type: 'string',
+            description: 'Path to the file to update'
+          },
+          content: {
+            type: 'string',
+            description: 'The new content to set for the file'
+          },
+          save: {
+            type: 'boolean',
+            description:
+              'Whether to save the file after updating (default: true)'
+          },
+          showDiff: {
+            type: 'boolean',
+            description:
+              'Whether to show a diff view of the changes (default: true)'
+          },
+          background: {
+            type: 'boolean',
+            description: BACKGROUND_DESCRIPTION
+          }
+        },
+        required: ['filePath', 'content']
+      }
+    },
+    execute: async (args: any) => {
+      const {
+        filePath,
+        content,
+        background,
+        save = true,
+        showDiff = true
+      } = args;
+
+      const widget = await getDocumentWidget(filePath, docManager, background);
+
+      if (!widget) {
+        throw new Error(`Failed to open file at path: ${filePath}`);
+      }
+
+      const model = widget.context.model;
+
+      if (!model) {
+        throw new Error('File model not available');
+      }
+
+      if (model.readOnly) {
+        throw new Error('File is read-only and cannot be modified');
+      }
+
+      const sharedModel = model.sharedModel;
+      const previousContent = sharedModel.getSource();
+
+      sharedModel.setSource(content);
+
+      const shouldShowDiff = showDiff ?? true;
+      if (shouldShowDiff && previousContent !== content) {
+        void commands.execute(UNIFIED_FILE_DIFF_COMMAND_ID, {
+          originalSource: previousContent,
+          newSource: content,
+          filePath,
+          showActionButtons: true
+        });
+      }
+
+      if (save) {
+        await widget.context.save();
+      }
+
+      return {
+        success: true,
+        filePath,
+        fileName: widget.title.label,
+        contentLength: content.length,
+        saved: save,
+        isDirty: model.dirty,
+        diffShown: shouldShowDiff && previousContent !== content
+      };
+    }
+  };
+
+  commands.addCommand(command.id, command);
+}
+
+/**
+ * Options for registering file commands
+ */
+export interface IRegisterFileCommandsOptions {
+  commands: CommandRegistry;
+  docManager: IDocumentManager;
+  editorTracker?: IEditorTracker;
+  serviceManager?: ServiceManager.IManager;
+}
+
+/**
+ * Register all file-related commands
+ */
+export function registerFileCommands(
+  options: IRegisterFileCommandsOptions
+): void {
+  const { commands, docManager, editorTracker, serviceManager } = options;
+
+  registerCreateFileCommand(commands, docManager);
+  registerOpenFileCommand(commands, docManager);
+  registerDeleteFileCommand(commands, docManager);
+  registerRenameFileCommand(commands, docManager);
+  registerCopyFileCommand(commands, docManager);
+  registerNavigateToDirectoryCommand(commands);
+  registerListDirectoryCommand(commands, docManager);
+  registerGetFileInfoCommand(
+    commands,
+    docManager,
+    editorTracker,
+    serviceManager
+  );
+  registerSetFileContentCommand(commands, docManager);
+}

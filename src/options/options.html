@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Jupyter WebMCP Extension: options</title>
+    <link rel="stylesheet" href="ui.css" />
+  </head>
+  <body class="options">
+    <h1>Jupyter WebMCP Extension</h1>
+
+    <section>
+      <h2>Enabled sites</h2>
+      <p class="muted">
+        The extension runs only on sites you enable. Enable a site from the
+        toolbar popup while its page is open.
+      </p>
+      <ul id="sites" class="sites"></ul>
+      <p id="no-sites" class="muted" hidden>No sites are enabled.</p>
+    </section>
+
+    <section>
+      <h2>WebMCP settings</h2>
+      <p class="muted">
+        JSON object with the settings of the WebMCP plugin: <code>tools</code>,
+        <code>disabledTools</code>, <code>blockedCommands</code>,
+        <code>executionTimeout</code> (seconds, 0 to 3600), and
+        <code>maxResultLength</code> (integer, at least 1000). Invalid values
+        fall back to the defaults. Tokens, notebook content, and outputs are
+        never stored here.
+      </p>
+      <textarea id="settings" rows="18" spellcheck="false"></textarea>
+      <div class="actions">
+        <button id="save" type="button">Save</button>
+        <button id="reset" type="button">Reset to defaults</button>
+      </div>
+      <div id="message" class="message" hidden></div>
+    </section>
+
+    <script src="options.js"></script>
+  </body>
+</html>

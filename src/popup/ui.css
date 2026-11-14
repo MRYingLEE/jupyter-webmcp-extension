@@ -1,0 +1,90 @@
+/* Shared styles for the popup and the options page. */
+
+body {
+  font-family: system-ui, sans-serif;
+  color: #1f1f1f;
+  margin: 0;
+}
+
+body.popup {
+  width: 320px;
+  padding: 12px;
+}
+
+body.options {
+  max-width: 760px;
+  margin: 24px auto;
+  padding: 0 16px;
+}
+
+h1 {
+  font-size: 18px;
+  margin: 0 0 8px;
+}
+
+h2 {
+  font-size: 15px;
+  margin: 16px 0 6px;
+}
+
+.muted {
+  color: #5f6368;
+  font-size: 13px;
+}
+
+button {
+  margin: 6px 6px 6px 0;
+  padding: 6px 12px;
+  cursor: pointer;
+}
+
+textarea {
+  width: 100%;
+  box-sizing: border-box;
+  font-family: ui-monospace, monospace;
+  font-size: 13px;
+}
+
+.message {
+  margin: 8px 0;
+  padding: 6px 8px;
+  border-radius: 4px;
+  font-size: 13px;
+  background: #e8f0fe;
+}
+
+.message.error {
+  background: #fce8e6;
+  color: #a50e0e;
+}
+
+.status {
+  list-style: none;
+  padding: 0;
+  font-size: 13px;
+}
+
+.status li {
+  margin: 4px 0;
+}
+
+.state-active {
+  color: #137333;
+}
+
+.state-failed {
+  color: #c62828;
+}
+
+.sites {
+  list-style: none;
+  padding: 0;
+}
+
+.sites li {
+  margin: 4px 0;
+}
+
+.actions {
+  margin-top: 8px;
+}

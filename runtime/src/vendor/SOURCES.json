@@ -1,0 +1,25 @@
+{
+  "description": "Pinned upstream sources vendored into runtime/src/vendor. Refresh by copying src/*.ts (without __tests__) from the listed commit, then reapply the patches below and rerun the integration matrix.",
+  "patches": [
+    {
+      "file": "jupyterlab-ai-commands/src/notebook-commands.ts",
+      "change": "CellExecutionStatus also accepts 'aborted' (type-only; JupyterLab 4.6 @jupyterlab/cells returns this status)."
+    }
+  ],
+  "sources": {
+    "jupyter-webmcp": {
+      "repository": "https://github.com/jtpio/jupyter-webmcp",
+      "commit": "9b7a1903c3bfa47ca77a9cb7cee694384e54fae1",
+      "version": "0.1.0",
+      "license": "BSD-3-Clause",
+      "paths": ["src/*.ts", "schema/plugin.json", "LICENSE"]
+    },
+    "jupyterlab-ai-commands": {
+      "repository": "https://github.com/jtpio/jupyterlab-ai-commands",
+      "commit": "4721ac83421487b73a3c2e500cd14a640b928920",
+      "version": "0.4.0",
+      "license": "BSD-3-Clause",
+      "paths": ["src/*.ts", "schema/plugin.json", "LICENSE"]
+    }
+  }
+}
