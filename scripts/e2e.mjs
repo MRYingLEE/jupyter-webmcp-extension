@@ -105,25 +105,78 @@ async function checkTools(page, base) {
     assert.ok(names.includes(name), `${base}: missing tool ${name}`);
   }
 
-  // Unique name so repeated runs on a shared server root do not collide.
+  // Unique names so repeated runs on a shared server root do not collide.
   const notebookName = `jwe-e2e-${Date.now()}`;
   const notebookPath = `${notebookName}.ipynb`;
-  const call = async (name, input) => {
+  const filePath = `${notebookName}.txt`;
+  const call = async (name, input, { expectSuccess = true } = {}) => {
     const text = await page.evaluate(async ([toolName, toolInput]) => {
       const tool = (await document.modelContext.getTools()).find(item => item.name === toolName);
       const result = await document.modelContext.executeTool(tool, toolInput);
       return typeof result === 'string' ? result : JSON.stringify(result);
     }, [name, input]);
     const parsed = JSON.parse(text);
-    assert.equal(parsed.success, true, `${base}: ${name} failed: ${text}`);
+    if (expectSuccess) {
+      assert.equal(parsed.success, true, `${base}: ${name} failed: ${text}`);
+    }
     return parsed;
   };
 
+  // Scenario from the plan (§8), in order. A shared server can restore dialogs from earlier runs (for
+  // example "Select Kernel"), so clear shown dialogs first; the harness expects a disposable server.
+  const clearDialogs = async () => {
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const { dialogs = [] } = await call('get_context', {});
+      const shown = dialogs.find(item => item.shown);
+      if (!shown) {
+        return;
+      }
+      const answer = await call('answer_dialog', { button: shown.buttons[0], dialogId: shown.id }, { expectSuccess: false });
+      assert.ok(answer.answered, `${base}: answer_dialog did not answer: ${JSON.stringify(answer)}`);
+    }
+    throw new Error(`${base}: dialogs keep opening`);
+  };
+  await clearDialogs();
   await call('create_notebook', { name: notebookName });
   const { cellId } = await call('add_cell', { notebookPath, content: 'print(1+1)', cellType: 'code' });
+  const unsaved = await call('read_notebook', { notebookPath });
+  assert.match(JSON.stringify(unsaved.content), /print\(1\+1\)/, `${base}: read_notebook unsaved cell`);
   const run = await call('run_cell', { notebookPath, cellId });
   assert.equal(run.status, 'ok', `${base}: run_cell status`);
   assert.match(JSON.stringify(run.outputs), /2/, `${base}: run_cell output`);
+  await call('save_notebook', { notebookPath });
+
+  await call('create_file', { fileName: filePath, fileType: 'text', content: 'before' });
+  await call('write_file', { filePath, content: 'hi' });
+  const file = await call('read_file', { filePath });
+  assert.equal(file.content, 'hi', `${base}: read_file content`);
+
+  // The kernel belongs to the notebook opened by this run, not to any earlier one.
+  const info = await call('get_context', {});
+  const kernelId = info.widgets?.find(widget => widget.path === notebookPath)?.kernel?.id;
+  assert.ok(kernelId, `${base}: no kernel for ${notebookPath} in get_context`);
+  const quick = await call('run_code', { kernelId, code: 'print(40+2)' });
+  assert.match(JSON.stringify(quick.outputs), /42/, `${base}: run_code output`);
+
+  // A call that outlives the foreground wait returns pending. Interrupt it, then collect the result.
+  const slow = await call('run_code', { kernelId, code: 'import time\ntime.sleep(60)' }, { expectSuccess: false });
+  assert.equal(slow.status, 'pending', `${base}: long run_code should be pending`);
+  await call('interrupt_kernel', { kernelId });
+  const settled = await call('wait_for_result', { pendingId: slow.pendingId, timeout: 60 }, { expectSuccess: false });
+  assert.notEqual(settled.status, 'ok', `${base}: interrupted run should not succeed`);
+  await call('restart_kernel', { kernelId });
+
+  const blocked = await call('execute_command', { command_id: 'apputils:run-all-enabled' }, { expectSuccess: false });
+  assert.equal(blocked.success, false, `${base}: blocked command should fail`);
+  assert.match(blocked.error ?? '', /blocked/, `${base}: blocked command message`);
+
+  // Writing a file that does not exist opens an error dialog; answer_dialog closes that dialog by id.
+  // Other dialogs may be open on a shared server, so the id is required.
+  const dialog = await call('write_file', { filePath: `${notebookName}-missing.txt`, content: 'x' }, { expectSuccess: false });
+  assert.equal(dialog.status, 'pending', `${base}: missing file should raise a dialog`);
+  assert.ok(dialog.dialog?.id, `${base}: dialog id missing`);
+  const answer = await call('answer_dialog', { button: dialog.dialog.buttons[0], dialogId: dialog.dialog.id }, { expectSuccess: false });
+  assert.ok(answer.answered, `${base}: answer_dialog did not answer: ${JSON.stringify(answer)}`);
 }
 
 async function checkPage(context, worker, extensionId, base, { webmcpFlag }) {
@@ -157,12 +210,28 @@ async function checkPage(context, worker, extensionId, base, { webmcpFlag }) {
   console.log(`ok ${base} (webmcp ${webmcpFlag ? 'enabled' : 'unsupported'})`);
 }
 
+async function checkNotEnabled(context, base) {
+  // 127.0.0.1 is a different origin from the enabled localhost origin, so it must not be injected.
+  const other = base.replace('://localhost', '://127.0.0.1');
+  if (other === base) {
+    return;
+  }
+  const page = await context.newPage();
+  await page.goto(`${other}/lab`, { waitUntil: 'load' });
+  await new Promise(resolveDelay => setTimeout(resolveDelay, 5000));
+  const injected = await page.evaluate(() => document.documentElement.getAttribute('data-jwe-runtime-base'));
+  assert.equal(injected, null, `${other}: runtime injected on a site that is not enabled`);
+  await page.close();
+  console.log(`ok ${other} (not enabled)`);
+}
+
 async function runSuite(webmcpFlag) {
   const { context, worker, extensionId } = await launch(webmcpFlag);
   try {
     for (const base of urls) {
       await checkPage(context, worker, extensionId, base, { webmcpFlag });
     }
+    await checkNotEnabled(context, urls[0]);
   } finally {
     await context.close();
   }
