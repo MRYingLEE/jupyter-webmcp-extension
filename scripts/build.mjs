@@ -86,4 +86,11 @@ writeFileSync(join(out, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\
 cpSync(join(labextension, 'static'), join(out, 'runtime', 'static'), { recursive: true });
 cpSync(join(labextension, 'package.json'), join(out, 'runtime', 'package.json'));
 
+// The bundled runtime includes BSD-3-Clause code from both upstream projects,
+// so their license texts ship with the build.
+for (const project of ['jupyter-webmcp', 'jupyterlab-ai-commands']) {
+  mkdirSync(join(out, 'licenses'), { recursive: true });
+  cpSync(join(root, 'runtime', 'src', 'vendor', project, 'LICENSE'), join(out, 'licenses', `${project}-LICENSE`));
+}
+
 console.log(`Built ${e2e ? 'e2e ' : ''}extension in ${out} (runtime entry ${entryLoad}).`);

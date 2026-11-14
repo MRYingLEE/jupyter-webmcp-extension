@@ -37,6 +37,8 @@ npm run build         # builds runtime/, then dist/
 ```
 
 Load `dist/` as an unpacked extension at `chrome://extensions` (developer mode).
+`dist/licenses/` holds the BSD-3-Clause license texts of the bundled upstream
+code; keep it in any package that is distributed.
 
 `npm run build:e2e` writes `dist-e2e/`. That build grants host permissions for
 all `http` and `https` origins, so the end-to-end harness needs no user gesture.
