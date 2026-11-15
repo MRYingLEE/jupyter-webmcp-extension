@@ -81,7 +81,7 @@ const plugin: JupyterFrontEndPlugin<IWebMCPRegistry> = {
     if (!modelContext) {
       const hint = unavailableHint(nullTranslator.load(DOMAIN));
       console.debug(`${LOG_PREFIX} ${hint}`);
-      reportStatus('webmcp', 'failed', 'document.modelContext is unavailable');
+      reportStatus('webmcp', 'failed', hint);
       return registry;
     }
 
