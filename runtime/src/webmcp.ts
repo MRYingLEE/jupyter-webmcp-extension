@@ -89,8 +89,20 @@ const plugin: JupyterFrontEndPlugin<IWebMCPRegistry> = {
       .then(() => RuntimeSettings.load())
       .then(settings => {
         settings.listen();
+        const reportToolCount = (): void => {
+          reportStatus(
+            'webmcp',
+            'active',
+            trans._n(
+              '%1 WebMCP tool available',
+              '%1 WebMCP tools available',
+              registry.toolNames.length
+            )
+          );
+        };
+        registry.changed.connect(reportToolCount);
         manager.start(asRegistrySettings(settings));
-        reportStatus('webmcp', 'active');
+        reportToolCount();
       })
       .catch(reason => {
         console.error(`${LOG_PREFIX} The tools could not be started:`, reason);

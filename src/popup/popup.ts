@@ -40,7 +40,15 @@ function appendComponents(
     const item = document.createElement('li');
     item.className = `state-${info.state}`;
     const label = COMPONENT_LABELS[component as IRuntimeStatus['component']];
-    item.textContent = `${prefix}${label}: ${info.state}${info.detail ? ` (${info.detail})` : ''}`;
+    const heading = document.createElement('span');
+    heading.textContent = `${prefix}${label}: ${info.state}`;
+    item.append(heading);
+    if (info.detail) {
+      const detail = document.createElement('div');
+      detail.className = 'status-detail';
+      detail.textContent = info.detail;
+      item.append(detail);
+    }
     statusList.append(item);
     shown += 1;
   }

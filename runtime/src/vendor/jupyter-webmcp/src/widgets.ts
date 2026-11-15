@@ -11,7 +11,7 @@ import { IWebMCPRegistry } from './tokens';
  */
 export function unavailableHint(trans: TranslationBundle): string {
   return trans.__(
-    'WebMCP is not available in this browser. In Chrome 155 or newer, enable WebMCP for testing at chrome://flags/#enable-webmcp-testing, relaunch Chrome, then reload JupyterLab. Alternatively, start Chrome with --enable-features=WebMCP. In DevTools on the page, confirm typeof document.modelContext returns "object". Jupyter must be open on localhost or HTTPS.'
+    'WebMCP is not available in this browser.\n\nEnable WebMCP in Chrome 155 or newer:\n1. Open chrome://flags/#enable-webmcp-testing, enable the flag, relaunch Chrome, then reload JupyterLab.\n2. Or start Chrome with --enable-features=WebMCP and reload JupyterLab.\n\nVerify in DevTools: typeof document.modelContext should return "object".\nJupyter must be open on localhost or HTTPS.'
   );
 }
 

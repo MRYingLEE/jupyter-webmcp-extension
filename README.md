@@ -40,7 +40,8 @@ npm run build         # builds runtime/, then dist/
 Load `dist/` as an unpacked extension at `chrome://extensions` (developer mode).
 The project is licensed under AGPL-3.0-only (see [LICENSE](./LICENSE)).
 `dist/licenses/` holds the BSD-3-Clause license texts of the bundled upstream
-code; keep it in any package that is distributed.
+code and the license for the Project Jupyter favicon used as the extension
+icon; keep it in any package that is distributed.
 
 `npm run build:e2e` writes `dist-e2e/`. That build grants host permissions for
 all `http` and `https` origins, so the end-to-end harness needs no user gesture.
@@ -50,7 +51,7 @@ The production manifest is not changed.
 
 1. Open a JupyterLab (or other supported) page.
 2. Click the extension icon and enable the site. The popup shows the component
-   status for the tab.
+   status for the tab, including a live WebMCP tool count when active.
 3. Connect an MCP client through WebMCP (Chrome with `--enable-features=WebMCP`).
    The tools are listed with `document.modelContext.getTools()`.
 

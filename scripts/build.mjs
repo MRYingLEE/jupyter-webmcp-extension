@@ -71,6 +71,7 @@ for (const page of ['popup', 'options']) {
 for (const file of ['popup/popup.html', 'popup/ui.css', 'options/options.html']) {
   cpSync(join(root, 'src', file), join(out, file.split('/').pop()));
 }
+cpSync(join(root, 'icons'), join(out, 'icons'), { recursive: true });
 
 const manifest = JSON.parse(readFileSync(join(root, 'manifest.json'), 'utf8'));
 if (e2e) {
@@ -92,5 +93,9 @@ for (const project of ['jupyter-webmcp', 'jupyterlab-ai-commands']) {
   mkdirSync(join(out, 'licenses'), { recursive: true });
   cpSync(join(root, 'runtime', 'src', 'vendor', project, 'LICENSE'), join(out, 'licenses', `${project}-LICENSE`));
 }
+cpSync(
+  join(root, 'licenses', 'jupyter-design-LICENSE'),
+  join(out, 'licenses', 'jupyter-design-LICENSE')
+);
 
 console.log(`Built ${e2e ? 'e2e ' : ''}extension in ${out} (runtime entry ${entryLoad}).`);

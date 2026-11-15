@@ -5,13 +5,23 @@
   "description": "Adds jupyterlab-ai-commands and jupyter-webmcp to Jupyter pages at runtime, without server-side installation.",
   "permissions": ["storage", "scripting", "activeTab"],
   "optional_host_permissions": ["http://*/*", "https://*/*"],
+  "icons": {
+    "16": "icons/jupyter.png",
+    "32": "icons/jupyter.png",
+    "48": "icons/jupyter.png",
+    "128": "icons/jupyter.png"
+  },
   "background": {
     "service_worker": "background.js",
     "type": "module"
   },
   "action": {
     "default_title": "Jupyter WebMCP Extension",
-    "default_popup": "popup.html"
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/jupyter.png",
+      "32": "icons/jupyter.png"
+    }
   },
   "options_ui": {
     "page": "options.html",

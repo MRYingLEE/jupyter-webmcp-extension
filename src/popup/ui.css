@@ -20,6 +20,15 @@ body.options {
 h1 {
   font-size: 18px;
   margin: 0 0 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+h1 img {
+  width: 20px;
+  height: 22px;
+  object-fit: contain;
 }
 
 h2 {
@@ -65,7 +74,15 @@ textarea {
 }
 
 .status li {
-  margin: 4px 0;
+  margin: 8px 0;
+}
+
+.status-detail {
+  margin-top: 3px;
+  color: #5f6368;
+  line-height: 1.4;
+  white-space: pre-line;
+  overflow-wrap: anywhere;
 }
 
 .state-active {
@@ -74,6 +91,10 @@ textarea {
 
 .state-failed {
   color: #c62828;
+}
+
+.state-failed .status-detail {
+  color: inherit;
 }
 
 .sites {
