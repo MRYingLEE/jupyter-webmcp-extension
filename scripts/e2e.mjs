@@ -48,18 +48,37 @@ async function launch(webmcpFlag, extensionDir = dist) {
   if (webmcpFlag) {
     args.push('--enable-features=WebMCP');
   }
-  const context = await chromium.launchPersistentContext(
-    mkdtempSync(join(tmpdir(), 'jwe-e2e-')),
-    {
+  const userDataDir = mkdtempSync(join(tmpdir(), 'jwe-e2e-'));
+  let context;
+  try {
+    context = await chromium.launchPersistentContext(userDataDir, {
       executablePath: process.env.JWE_CHROME || undefined,
       headless: true,
       ignoreDefaultArgs: ['--disable-extensions'],
       args
+    });
+    let [worker] = context.serviceWorkers();
+    worker ??= await context.waitForEvent('serviceworker');
+    return {
+      context,
+      worker,
+      extensionId: new URL(worker.url()).host,
+      async close() {
+        try {
+          await context.close();
+        } finally {
+          rmSync(userDataDir, { recursive: true, force: true });
+        }
+      }
+    };
+  } catch (error) {
+    try {
+      await context?.close();
+    } finally {
+      rmSync(userDataDir, { recursive: true, force: true });
     }
-  );
-  let [worker] = context.serviceWorkers();
-  worker ??= await context.waitForEvent('serviceworker');
-  return { context, worker, extensionId: new URL(worker.url()).host };
+    throw error;
+  }
 }
 
 async function enable(context, extensionId, origin) {
@@ -396,7 +415,7 @@ async function checkReload(context, worker, base) {
 }
 
 async function runSuite(webmcpFlag) {
-  const { context, worker, extensionId } = await launch(webmcpFlag);
+  const { context, worker, extensionId, close } = await launch(webmcpFlag);
   try {
     for (const base of urls) {
       await checkPage(context, worker, extensionId, base, { webmcpFlag });
@@ -412,7 +431,7 @@ async function runSuite(webmcpFlag) {
       }
     }
   } finally {
-    await context.close();
+    await close();
   }
 }
 
@@ -427,7 +446,7 @@ async function runMissingRuntime() {
       rmSync(join(staticDir, file));
     }
   }
-  const { context, worker, extensionId } = await launch(true, dir);
+  const { context, worker, extensionId, close } = await launch(true, dir);
   try {
     const base = urls[0];
     await enable(context, extensionId, base);
@@ -444,8 +463,11 @@ async function runMissingRuntime() {
     await page.close();
     console.log(`ok ${base} (runtime missing: failed runtime status, no tools)`);
   } finally {
-    await context.close();
-    rmSync(dir, { recursive: true, force: true });
+    try {
+      await close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   }
 }
 
@@ -478,7 +500,7 @@ async function runCrossOrigin() {
     return;
   }
   const parentServer = await startParentServer();
-  const { context, worker, extensionId } = await launch(true);
+  const { context, worker, extensionId, close } = await launch(true);
   try {
     for (const child of lites) {
       await enable(context, extensionId, child);
@@ -493,15 +515,18 @@ async function runCrossOrigin() {
       await checkCrossOrigin(context, worker, child, { allowTools: false, parentEnabled: true });
     }
   } finally {
-    await context.close();
-    parentServer.close();
+    try {
+      await close();
+    } finally {
+      parentServer.close();
+    }
   }
 }
 
 // The served CSP has no chrome-extension: source, yet the runtime still loads: Chrome does not apply the page's
 // script-src to a web-accessible extension resource. The check records that the runtime works under this policy.
 async function runStrictCsp() {
-  const { context, worker, extensionId } = await launch(true);
+  const { context, worker, extensionId, close } = await launch(true);
   try {
     await enable(context, extensionId, cspUrl);
     const page = await context.newPage();
@@ -518,7 +543,7 @@ async function runStrictCsp() {
     await page.close();
     console.log(`ok ${cspUrl} (strict CSP: runtime loads, status and tools present)`);
   } finally {
-    await context.close();
+    await close();
   }
 }
 

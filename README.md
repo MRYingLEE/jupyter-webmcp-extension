@@ -16,9 +16,10 @@ The design and the decisions behind it are in
   a runtime bundle shipped inside the extension. The runtime is a JupyterLab
   federated extension built from pinned sources in
   [runtime/src/vendor](./runtime/src/vendor).
-- If the page already has a native install of these components, the extension
-  leaves it alone. Native `jupyterlab-ai-commands` releases earlier than 0.4
-  (`jupyterlite-ai`) are not supported.
+- Native components listed in the page's federated extensions are left alone.
+  Source-built native plugins are not yet verified and may conflict. Native
+  `jupyterlab-ai-commands` releases earlier than 0.4 (`jupyterlite-ai`) are not
+  supported.
 - WebMCP is registered only when Chrome exposes `document.modelContext`. Start
   Chrome with `--enable-features=WebMCP` to get it. Without the flag, the
   extension reports WebMCP as unsupported and the AI commands still load.
@@ -58,6 +59,9 @@ The options page lists enabled sites. It also holds the WebMCP settings as JSON:
 (seconds, 0 to 3600), and `maxResultLength` (integer, at least 1000). Invalid
 values fall back to defaults. The default `blockedCommands` are
 `apputils:run-all-enabled` and `apputils:run-first-enabled`.
+These settings are shared by all enabled sites.
+If the settings bridge cannot be reached, WebMCP tools do not start; reload
+the page after checking that the extension is enabled.
 
 Tokens, notebook content, and outputs are never stored or logged.
 

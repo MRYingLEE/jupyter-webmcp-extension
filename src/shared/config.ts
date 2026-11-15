@@ -86,21 +86,29 @@ export function federatedEntryUrl(
 }
 
 /**
- * Whether JupyterLab's configuration disables an extension by name.
+ * Whether JupyterLab's configuration disables a plugin or its extension.
  *
- * JupyterLab stores `disabledExtensions` as either a list of names or a map
- * from names to `true`.
+ * JupyterLab checks both the plugin id and the extension name. Also accept
+ * the map form used by some configuration sources.
  */
 export function isExtensionDisabled(
   config: Pick<IPageConfig, 'disabledExtensions'>,
-  name: string
+  id: string
 ): boolean {
-  const disabled = config.disabledExtensions;
+  let disabled = config.disabledExtensions;
+  if (typeof disabled === 'string') {
+    try {
+      disabled = JSON.parse(disabled);
+    } catch {
+      return false;
+    }
+  }
+  const name = id.split(':', 1)[0];
   if (Array.isArray(disabled)) {
-    return disabled.includes(name);
+    return disabled.includes(id) || disabled.includes(name);
   }
   if (isRecord(disabled)) {
-    return disabled[name] === true;
+    return disabled[id] === true || disabled[name] === true;
   }
   return false;
 }

@@ -89,7 +89,7 @@ function componentState(
   native: Set<string>,
   name: string
 ): ComponentState {
-  if (isExtensionDisabled(config, name)) {
+  if (isExtensionDisabled(config, `${name}:plugin`)) {
     return 'disabled';
   }
   return native.has(name) ? 'native' : 'injected';

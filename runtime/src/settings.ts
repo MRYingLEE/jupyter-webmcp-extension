@@ -2,8 +2,8 @@
  * Settings for the injected WebMCP plugin.
  *
  * The runtime runs in the page, so it cannot read the extension's storage. It
- * asks the isolated bridge for the stored values instead, and falls back to
- * the defaults of the upstream schema when the bridge does not answer.
+ * asks the isolated bridge for the stored values instead. If the bridge does
+ * not answer, startup fails rather than discarding user restrictions.
  */
 
 import { ISettingRegistry } from '@jupyterlab/settingregistry';
@@ -17,7 +17,7 @@ import { normalizeSettings, WEBMCP_DEFAULTS } from './webmcp-settings';
 
 export { normalizeSettings, WEBMCP_DEFAULTS };
 
-/** How long to wait for the bridge before using the defaults. */
+/** How long to wait for the bridge before failing startup. */
 const REQUEST_TIMEOUT_MS = 2000;
 
 /**
@@ -30,15 +30,14 @@ export class RuntimeSettings {
   }
 
   /**
-   * Load the stored settings through the bridge, using the defaults when the
-   * bridge does not answer in time.
+   * Load the stored settings through the bridge.
    */
   static load(): Promise<RuntimeSettings> {
-    return new Promise<RuntimeSettings>(resolve => {
+    return new Promise<RuntimeSettings>((resolve, reject) => {
       const nonce = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
       const timer = setTimeout(() => {
         document.removeEventListener(SETTINGS_RESPONSE, onResponse);
-        resolve(new RuntimeSettings({}));
+        reject(new Error('Timed out waiting for WebMCP settings from the extension.'));
       }, REQUEST_TIMEOUT_MS);
       const onResponse = (event: Event): void => {
         const detail = parseDetail((event as CustomEvent).detail);

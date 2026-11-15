@@ -460,3 +460,15 @@ These items are not verified. Each one is a gap, not a known failure.
 12. **Embedded-frame policy is not confirmed.** Whether the ancestor-enabled rule
     matches the intent, and whether badge-only failure visibility is enough, are
     open decisions (see the risk rows above).
+13. **Source-built native plugins are not confirmed.** The runtime currently
+    uses the upstream plugin IDs and has no `hasPlugin`/`isPluginActivated`
+    confirmation. A native plugin absent from `federated_extensions` can
+    conflict at registration, before the runtime's command conflict check.
+    Native and source-built fixture coverage is still needed.
+14. **Settings are global, not per origin.** The options page and bridge use
+    one storage key for all enabled sites, unlike the per-origin design in
+    §4.4. Users should not assume different sites have independent settings.
+15. **Concurrent status reports can overwrite each other.** The service worker
+    updates shared session-storage objects with unsynchronized read-modify-write
+    operations. Reports from different components or frames can race, causing
+    incomplete popup or badge status.

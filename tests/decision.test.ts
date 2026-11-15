@@ -37,7 +37,15 @@ describe('decideInjection', () => {
       federated_extensions: [{ name: WEBMCP_PACKAGE, load: 'remoteEntry.js' }],
       disabledExtensions: [WEBMCP_PACKAGE]
     });
+
     expect(decideInjection(config).webmcp).toBe('disabled');
+  });
+
+  it('does not inject a component whose main plugin is disabled', () => {
+    const config = pageConfig({
+      disabledExtensions: ['jupyterlab-ai-commands:plugin', 'jupyter-webmcp:plugin']
+    });
+    expect(decideInjection(config)).toEqual({ ai: 'disabled', webmcp: 'disabled' });
   });
 });
 

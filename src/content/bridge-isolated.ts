@@ -81,13 +81,18 @@ document.addEventListener(SETTINGS_REQUEST, event => {
   if (typeof nonce !== 'string') {
     return;
   }
-  void readSettings().then(settings => {
-    document.dispatchEvent(
-      new CustomEvent(SETTINGS_RESPONSE, {
-        detail: JSON.stringify({ nonce, settings })
-      })
-    );
-  });
+  void readSettings().then(
+    settings => {
+      document.dispatchEvent(
+        new CustomEvent(SETTINGS_RESPONSE, {
+          detail: JSON.stringify({ nonce, settings })
+        })
+      );
+    },
+    (error: unknown) => {
+      console.error('Unable to read WebMCP settings:', error);
+    }
+  );
 });
 
 chrome.storage.onChanged.addListener((changes, area) => {

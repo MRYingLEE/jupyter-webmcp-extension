@@ -50,6 +50,15 @@ describe('isExtensionDisabled', () => {
     expect(isExtensionDisabled({ disabledExtensions: { a: false } }, 'a')).toBe(false);
     expect(isExtensionDisabled({}, 'a')).toBe(false);
   });
+
+  it('matches a plugin id or its extension, including JSON-encoded lists', () => {
+    expect(isExtensionDisabled({ disabledExtensions: ['a:plugin'] }, 'a:plugin')).toBe(true);
+    expect(isExtensionDisabled({ disabledExtensions: ['a'] }, 'a:plugin')).toBe(true);
+    expect(isExtensionDisabled({ disabledExtensions: '["a:plugin"]' }, 'a:plugin')).toBe(true);
+    expect(isExtensionDisabled({ disabledExtensions: { 'a:plugin': true } }, 'a:plugin')).toBe(true);
+    expect(isExtensionDisabled({ disabledExtensions: ['a:other'] }, 'a:plugin')).toBe(false);
+    expect(isExtensionDisabled({ disabledExtensions: 'invalid' }, 'a:plugin')).toBe(false);
+  });
 });
 
 describe('webOrigin', () => {
