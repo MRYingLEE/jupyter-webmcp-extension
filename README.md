@@ -8,6 +8,11 @@ runtime. Nothing is installed on the Jupyter server.
 The design and the decisions behind it are in
 [IMPLEMENTATION_PLAN.md](./IMPLEMENTATION_PLAN.md).
 
+> **Download:** [jupyter-webmcp-extension.zip](./jupyter-webmcp-extension.zip)  
+> Unzip the file, open `chrome://extensions`, enable **Developer mode**, and
+> choose **Load unpacked**. Select the extracted folder containing
+> `manifest.json`.
+
 ## How it works
 
 - The extension runs only on sites you enable from the toolbar popup. Nothing
@@ -35,9 +40,11 @@ directory is on `PATH`).
 npm ci
 (cd runtime && npm ci)
 npm run build         # builds runtime/, then dist/
+npm run package       # builds dist/ and creates jupyter-webmcp-extension.zip
 ```
 
-Load `dist/` as an unpacked extension at `chrome://extensions` (developer mode).
+The ZIP is ready to unzip and load as an unpacked extension. It contains the
+production build (without source maps). `npm run build` alone creates `dist/`.
 The project is licensed under AGPL-3.0-only (see [LICENSE](./LICENSE)).
 `dist/licenses/` holds the BSD-3-Clause license texts of the bundled upstream
 code and the license for the Project Jupyter favicon used as the extension
