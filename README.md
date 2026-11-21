@@ -28,6 +28,19 @@ The design and the decisions behind it are in
 - WebMCP is registered only when Chrome exposes `document.modelContext`. Start
   Chrome with `--enable-features=WebMCP` to get it. Without the flag, the
   extension reports WebMCP as unsupported and the AI commands still load.
+- The extension catalog ([scripts/catalog-pins.json](./scripts/catalog-pins.json))
+  lists front-end extensions you can inject per tab, currently anywidget 0.11
+  and 0.10. Each one is built from a pinned source into `runtime/catalog/`, and
+  the popup shows which catalog entries are active. Each anywidget line matches
+  the kernel's anywidget minor version. Catalog entries never replace an
+  extension the deployment already provides.
+- A catalog selection is kept in `sessionStorage` for the tab and the Jupyter
+  instance (origin and base URL). Anywidget 0.11 is selected by default, so an
+  instance with no saved selection gets it; saving with no extensions checked
+  opts the instance out. A selection is cleared when the tab closes and does
+  not apply to other instances. A frame that runs the runtime reads its own
+  `sessionStorage`, so a frame with no saved record gets the default selection.
+  The popup selection applies only to the top-level tab.
 
 ## Build
 
@@ -39,9 +52,15 @@ directory is on `PATH`).
 ```sh
 npm ci
 (cd runtime && npm ci)
-npm run build         # builds runtime/, then dist/
+ANYWIDGET_SOURCE=/path/to/anywidget npm run build:catalog   # once, or after changing scripts/catalog-pins.json
+npm run build         # builds runtime/, then dist/ (requires runtime/catalog/)
 npm run package       # builds dist/ and creates jupyter-webmcp-extension.zip
 ```
+
+`build:catalog` builds each pinned catalog entry from the local anywidget
+checkout in `ANYWIDGET_SOURCE` (for the 0.10 line, the pinned commit must be
+present in that checkout). It writes `runtime/catalog/<id>/`, which is
+git-ignored. `build` does not run `build:catalog` for you.
 
 The ZIP is ready to unzip and load as an unpacked extension. It contains the
 production build (without source maps). `npm run build` alone creates `dist/`.
@@ -105,6 +124,11 @@ Verified with the end-to-end scenario in Chrome for Testing 156 (see
 | JupyterLite 0.8.7 | Passed |
 | Notebook 7.6.5 (`/lab`) | Passed |
 
+The catalog scenario is verified on JupyterLab 4.6.6: anywidget 0.11 (kernel
+anywidget 0.11.0) through the end-to-end harness, and anywidget 0.10 (kernel
+anywidget 0.10.0) by a manual notebook check. JupyterLite is not yet verified
+for the catalog. Other JupyterLab versions are untested for the catalog.
+
 Also passed under a strict CSP (`script-src 'self' 'unsafe-eval'`, no
 `'unsafe-inline'`, no `chrome-extension:`) on JupyterLab 4.6.6. JupyterLab
 itself needs `'unsafe-eval'` (see [IMPLEMENTATION_PLAN.md](./IMPLEMENTATION_PLAN.md) §7).
@@ -142,4 +166,8 @@ npm run test:e2e
 `JWE_E2E_URLS` is required. `JWE_CHROME` is optional, for when Playwright's
 bundled browser is absent. The harness checks that every tool in the §8 scenario
 works, that WebMCP is marked unsupported without the flag, and that a site that is
-not enabled gets no runtime.
+not enabled gets no runtime. On non-Lite URLs it also checks the default
+selection (anywidget 0.11 for a tab with no saved selection), an opt-out with an
+empty selection, that the other tab and other instances are unaffected, and that
+a notebook anywidget renders. That check needs the anywidget 0.11 package in
+the server's kernel environment and `runtime/catalog/anywidget-0.11` built.

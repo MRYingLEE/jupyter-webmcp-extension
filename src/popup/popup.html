@@ -10,8 +10,19 @@
     <p id="origin" class="muted"></p>
     <div id="message" class="message" hidden></div>
     <button id="toggle" type="button" hidden></button>
-    <button id="reload" type="button" hidden>Reload page to enable</button>
+    <button id="reload" type="button" hidden>Reload page</button>
     <ul id="status" class="status"></ul>
+    <section id="catalog" class="catalog" hidden>
+      <h2>Extensions for this tab</h2>
+      <p class="muted">
+        Selected extensions run in this page with the same access as JupyterLab
+        extensions. Select only extensions you trust.
+      </p>
+      <ul id="catalog-list" class="status"></ul>
+      <p id="catalog-note" class="muted" hidden></p>
+      <p class="muted">Anywidget 0.11 is on by default. Save with nothing checked to turn the catalog off for this tab.</p>
+      <button id="apply-catalog" type="button">Save for this tab</button>
+    </section>
     <p class="muted">
       <a href="options.html" target="_blank" rel="noreferrer">Options</a>
     </p>

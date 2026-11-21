@@ -5,22 +5,50 @@
 
 import type { IEmbeddedStatus, IStateResponse, ITabStatus } from '../shared/messages';
 import { originPattern, webOrigin } from '../shared/origin';
-import type { IRuntimeStatus } from '../../runtime/src/channel';
+import { CATALOG, catalogEntry } from '../shared/catalog';
+import { CatalogState, decideInjection } from '../shared/decision';
+import { parsePageConfig } from '../shared/config';
+import { SELECTION_KEY, selectionFor, serializeSelection } from '../shared/selection';
 
 const originLabel = document.getElementById('origin') as HTMLElement;
 const message = document.getElementById('message') as HTMLElement;
 const toggle = document.getElementById('toggle') as HTMLButtonElement;
 const reload = document.getElementById('reload') as HTMLButtonElement;
 const statusList = document.getElementById('status') as HTMLElement;
+const catalogSection = document.getElementById('catalog') as HTMLElement;
+const catalogList = document.getElementById('catalog-list') as HTMLElement;
+const catalogNote = document.getElementById('catalog-note') as HTMLElement;
+const applyCatalog = document.getElementById('apply-catalog') as HTMLButtonElement;
 
-const COMPONENT_LABELS: Record<IRuntimeStatus['component'], string> = {
+const COMPONENT_LABELS: Partial<Record<string, string>> = {
   ai: 'AI commands',
   webmcp: 'WebMCP',
   runtime: 'Runtime'
 };
 
+const CATALOG_STATE_LABELS: Record<CatalogState, string> = {
+  injected: 'will be injected',
+  native: 'already loaded by this page',
+  disabled: 'disabled in this Jupyter instance',
+  conflict: 'a native extension with the same API is already loaded',
+  unsupported: 'a required dependency is disabled',
+  unselected: 'not selected'
+};
+
 let tabId: number | undefined;
 let origin: string | null = null;
+/** The base URL of the Jupyter instance on this tab, when the catalog is shown. */
+let catalogBaseUrl: string | null = null;
+
+/** The result of reading the page's configuration and selection. */
+interface IPageSnapshot {
+  configText: string | null;
+  selection: string | null;
+}
+
+function componentLabel(component: string): string {
+  return COMPONENT_LABELS[component] ?? catalogEntry(component)?.label ?? component;
+}
 
 function showMessage(text: string, error = false): void {
   message.textContent = text;
@@ -39,7 +67,7 @@ function appendComponents(
     }
     const item = document.createElement('li');
     item.className = `state-${info.state}`;
-    const label = COMPONENT_LABELS[component as IRuntimeStatus['component']];
+    const label = componentLabel(component);
     const heading = document.createElement('span');
     heading.textContent = `${prefix}${label}: ${info.state}`;
     item.append(heading);
@@ -86,6 +114,125 @@ async function refresh(): Promise<void> {
   })) as IStateResponse;
   renderEnabled(response.enabled);
   renderStatus(response.status, response.embedded);
+  await renderCatalog(tabId, response.enabled);
+}
+
+/** Read the page's configuration and selection from the top frame's main world. */
+async function readPage(id: number): Promise<IPageSnapshot | null> {
+  try {
+    const [injection] = await chrome.scripting.executeScript({
+      target: { tabId: id, frameIds: [0] },
+      world: 'MAIN',
+      args: [SELECTION_KEY],
+      // `text` is read instead of `textContent`, which the page hook rewrites.
+      func: (key: string) => {
+        const element = document.getElementById('jupyter-config-data') as HTMLScriptElement | null;
+        let selection: string | null = null;
+        try {
+          selection = sessionStorage.getItem(key);
+        } catch {
+          selection = null;
+        }
+        return { configText: element ? element.text : null, selection };
+      }
+    });
+    return (injection?.result as IPageSnapshot | undefined) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** Store the selection record in the top frame's sessionStorage. */
+async function writeSelection(id: number, value: string): Promise<boolean> {
+  try {
+    const [injection] = await chrome.scripting.executeScript({
+      target: { tabId: id, frameIds: [0] },
+      world: 'MAIN',
+      args: [SELECTION_KEY, value],
+      func: (key: string, data: string) => {
+        try {
+          sessionStorage.setItem(key, data);
+          return true;
+        } catch {
+          return false;
+        }
+      }
+    });
+    return injection?.result === true;
+  } catch {
+    return false;
+  }
+}
+
+/** The labels of a catalog entry's state and its kernel requirement, if any. */
+function catalogDetails(id: string, state: CatalogState): string[] {
+  const entry = catalogEntry(id);
+  if (!entry) {
+    return [];
+  }
+  const lines = [
+    entry.role === 'dependency'
+      ? `Dependency, ${CATALOG_STATE_LABELS[state]}`
+      : CATALOG_STATE_LABELS[state]
+  ];
+  if (entry.role === 'dependency') {
+    const required = CATALOG.filter(other => other.requires.includes(entry.id)).map(
+      other => other.label
+    );
+    lines.push(`Required by ${required.join(', ')}`);
+  }
+  if (entry.kernelRequirement) {
+    lines.push(`Kernel: pip install "${entry.kernelRequirement}"`);
+  }
+  return lines;
+}
+
+/** Show the catalog for an enabled tab whose page is a Jupyter instance. */
+async function renderCatalog(id: number, enabled: boolean): Promise<void> {
+  catalogSection.hidden = true;
+  if (!enabled) {
+    return;
+  }
+  const snapshot = await readPage(id);
+  const config = snapshot?.configText ? parsePageConfig(snapshot.configText) : null;
+  if (!snapshot || !config) {
+    return;
+  }
+  catalogSection.hidden = false;
+  catalogList.replaceChildren();
+  catalogBaseUrl = config.baseUrl ?? null;
+  if (!config.baseUrl) {
+    catalogNote.textContent =
+      'This Jupyter page does not report its base URL, so extensions cannot be selected for it.';
+    catalogNote.hidden = false;
+    applyCatalog.hidden = true;
+    return;
+  }
+  catalogNote.hidden = true;
+  applyCatalog.hidden = false;
+
+  const selected = selectionFor(snapshot.selection, config.baseUrl);
+  const decision = decideInjection(config, selected);
+  for (const entry of CATALOG) {
+    const item = document.createElement('li');
+    const state = decision.catalog[entry.id];
+    if (entry.role === 'extension') {
+      const label = document.createElement('label');
+      const box = document.createElement('input');
+      box.type = 'checkbox';
+      box.value = entry.id;
+      box.checked = selected.has(entry.id);
+      label.append(box, ` ${entry.label}`);
+      item.append(label);
+    } else {
+      item.append(entry.label);
+    }
+    const detail = document.createElement('div');
+    detail.className = 'status-detail';
+    detail.textContent = catalogDetails(entry.id, state).join('. ');
+    item.append(detail);
+    catalogList.append(item);
+  }
 }
 
 async function init(): Promise<void> {
@@ -144,6 +291,30 @@ reload.addEventListener('click', () => {
     void chrome.tabs.reload(tabId);
   }
   window.close();
+});
+
+applyCatalog.addEventListener('click', () => {
+  const id = tabId;
+  const baseUrl = catalogBaseUrl;
+  if (id === undefined || baseUrl === null) {
+    return;
+  }
+  const ids = Array.from(
+    catalogList.querySelectorAll<HTMLInputElement>('input[type="checkbox"]:checked'),
+    box => box.value
+  );
+  void (async () => {
+    const saved = await writeSelection(id, serializeSelection(baseUrl, ids));
+    if (!saved) {
+      showMessage('Could not save the selection for this page.', true);
+      return;
+    }
+    showMessage(
+      'Saved. Reload the page to load the selected extensions. Unsaved notebook changes may be lost on reload.'
+    );
+    reload.hidden = false;
+    await refresh();
+  })();
 });
 
 void init();

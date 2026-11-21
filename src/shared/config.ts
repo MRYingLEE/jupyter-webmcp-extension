@@ -36,6 +36,7 @@ export interface IFederatedExtension {
 export interface IPageConfig {
   federated_extensions: IFederatedExtension[];
   fullLabextensionsUrl: string;
+  baseUrl?: string;
   appName?: string;
   appVersion?: string;
   disabledExtensions?: unknown;

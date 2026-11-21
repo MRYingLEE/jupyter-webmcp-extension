@@ -1,0 +1,52 @@
+{
+  "entries": [
+    {
+      "id": "widget-manager",
+      "label": "ipywidgets widget manager",
+      "role": "dependency",
+      "federation": "@jupyter-widgets/jupyterlab-manager",
+      "plugin": "@jupyter-widgets/jupyterlab-manager:plugin",
+      "provides": "IJupyterWidgetRegistry",
+      "requires": [],
+      "source": {
+        "kind": "pypi",
+        "package": "jupyterlab_widgets",
+        "version": "3.0.17",
+        "sha256": "40ac1e9955acf116c4d995d9bfa082d86ad9ec6d91c4f134827cf5e0a5eb75e0"
+      }
+    },
+    {
+      "id": "anywidget-0.11",
+      "label": "anywidget 0.11",
+      "role": "extension",
+      "federation": "anywidget_0_11",
+      "plugin": "anywidget_0_11:plugin",
+      "line": "0.11",
+      "selectedByDefault": true,
+      "kernelRequirement": "anywidget==0.11.*",
+      "conflicts": ["anywidget"],
+      "requires": ["widget-manager"],
+      "source": {
+        "kind": "git",
+        "repository": "https://github.com/manzt/anywidget",
+        "commit": "35160ac08e75918faee008a3b8996ab2a0a16a46"
+      }
+    },
+    {
+      "id": "anywidget-0.10",
+      "label": "anywidget 0.10",
+      "role": "extension",
+      "federation": "anywidget_0_10",
+      "plugin": "anywidget_0_10:plugin",
+      "line": "0.10",
+      "kernelRequirement": "anywidget==0.10.*",
+      "conflicts": ["anywidget"],
+      "requires": ["widget-manager"],
+      "source": {
+        "kind": "git",
+        "repository": "https://github.com/manzt/anywidget",
+        "commit": "5428c60730f79e52d8ae2f235942b023c0cbc665"
+      }
+    }
+  ]
+}

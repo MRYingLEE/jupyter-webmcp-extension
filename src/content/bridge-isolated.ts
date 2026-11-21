@@ -14,12 +14,20 @@ import {
   STATUS_EVENT,
   IRuntimeStatus
 } from '../../runtime/src/channel';
+import { CATALOG_IDS } from '../shared/catalog';
 import { isRecord } from '../shared/config';
 import { allowsTools, mayGrantRuntime } from '../shared/frame-policy';
 import { ENABLED_ORIGINS_KEY, SETTINGS_STORAGE_KEY } from '../shared/storage';
 import { ExtensionMessage } from '../shared/messages';
 
 const runtimeBase = chrome.runtime.getURL('runtime/');
+
+const RUNTIME_COMPONENTS: ReadonlySet<string> = new Set(['ai', 'webmcp', 'runtime']);
+
+/** Whether a reported component is one the runtime or the page hook provides. */
+function isStatusComponent(component: string): boolean {
+  return RUNTIME_COMPONENTS.has(component) || CATALOG_IDS.has(component);
+}
 
 function setRuntimeBase(): boolean {
   const root = document.documentElement;
@@ -136,7 +144,7 @@ function parseStatus(detail: unknown): IRuntimeStatus | null {
     return null;
   }
   const { component, state } = parsed;
-  if (component !== 'ai' && component !== 'webmcp' && component !== 'runtime') {
+  if (typeof component !== 'string' || !isStatusComponent(component)) {
     return null;
   }
   if (state !== 'active' && state !== 'failed') {

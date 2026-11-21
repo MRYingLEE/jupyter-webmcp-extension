@@ -4,6 +4,9 @@
  * The runtime must be built first (`npm run build:runtime`): its
  * `labextension/` output is copied to `runtime/` in the extension, and its
  * remoteEntry file name is injected into the MAIN-world hook.
+ *
+ * The catalog builds (`runtime/catalog/`) must exist too; run
+ * `npm run build:catalog` once, with `ANYWIDGET_SOURCE` set, before building.
  */
 
 import { build } from 'esbuild';
@@ -24,6 +27,23 @@ const runtimePackage = JSON.parse(readFileSync(join(labextension, 'package.json'
 const entryLoad = runtimePackage.jupyterlab?._build?.load;
 if (typeof entryLoad !== 'string') {
   throw new Error('runtime/labextension/package.json has no jupyterlab._build.load entry.');
+}
+
+// The catalog is built separately (`npm run build:catalog`) because it needs a
+// local anywidget checkout and network access. Only its built output is read here.
+const catalogRoot = join(root, 'runtime', 'catalog');
+const pins = JSON.parse(readFileSync(join(root, 'scripts', 'catalog-pins.json'), 'utf8'));
+const catalogBuilds = {};
+for (const { id } of pins.entries) {
+  const packagePath = join(catalogRoot, id, 'package.json');
+  if (!existsSync(packagePath)) {
+    throw new Error(`runtime/catalog/${id} is missing; run \`npm run build:catalog\` first.`);
+  }
+  const build = JSON.parse(readFileSync(packagePath, 'utf8')).jupyterlab?._build;
+  if (typeof build?.load !== 'string' || typeof build?.extension !== 'string') {
+    throw new Error(`runtime/catalog/${id}/package.json has no jupyterlab._build entry.`);
+  }
+  catalogBuilds[id] = { load: build.load, extension: build.extension };
 }
 
 rmSync(out, { recursive: true, force: true });
@@ -49,7 +69,10 @@ await build({
   entryPoints: [join(root, 'src/content/main.ts')],
   outfile: join(out, 'content-main.js'),
   format: 'iife',
-  define: { __RUNTIME_LOAD__: JSON.stringify(entryLoad) }
+  define: {
+    __RUNTIME_LOAD__: JSON.stringify(entryLoad),
+    __CATALOG_BUILDS__: JSON.stringify(catalogBuilds)
+  }
 });
 
 await build({
@@ -87,6 +110,11 @@ writeFileSync(join(out, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\
 cpSync(join(labextension, 'static'), join(out, 'runtime', 'static'), { recursive: true });
 cpSync(join(labextension, 'package.json'), join(out, 'runtime', 'package.json'));
 
+// Catalog artifacts keep their own LICENSE files, copied with each directory.
+for (const id of Object.keys(catalogBuilds)) {
+  cpSync(join(catalogRoot, id), join(out, 'runtime', 'catalog', id), { recursive: true });
+}
+
 // The bundled runtime includes BSD-3-Clause code from both upstream projects,
 // so their license texts ship with the build.
 for (const project of ['jupyter-webmcp', 'jupyterlab-ai-commands']) {
@@ -98,4 +126,6 @@ cpSync(
   join(out, 'licenses', 'jupyter-design-LICENSE')
 );
 
-console.log(`Built ${e2e ? 'e2e ' : ''}extension in ${out} (runtime entry ${entryLoad}).`);
+console.log(
+  `Built ${e2e ? 'e2e ' : ''}extension in ${out} (runtime entry ${entryLoad}, catalog ${Object.keys(catalogBuilds).join(', ')}).`
+);

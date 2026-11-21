@@ -6,14 +6,10 @@
  */
 
 import { PageConfig } from '@jupyterlab/coreutils';
-import { RUNTIME_CONFIG_KEY } from './channel';
+import { ICatalogFlag, IRuntimeFlags, RUNTIME_CONFIG_KEY } from './channel';
 import aiPlugin from './ai';
+import { catalogStatusPlugin } from './catalog-status';
 import webmcpPlugins from './webmcp';
-
-interface IRuntimeFlags {
-  ai: boolean;
-  webmcp: boolean;
-}
 
 function readFlags(): IRuntimeFlags {
   const raw: unknown = PageConfig.getOption(RUNTIME_CONFIG_KEY);
@@ -26,13 +22,20 @@ function readFlags(): IRuntimeFlags {
     }
   }
   const flags = (value ?? {}) as Partial<IRuntimeFlags>;
-  return { ai: flags.ai === true, webmcp: flags.webmcp === true };
+  const catalog = Array.isArray(flags.catalog)
+    ? flags.catalog.filter(
+        (entry): entry is ICatalogFlag =>
+          typeof entry?.id === 'string' && typeof entry?.plugin === 'string'
+      )
+    : [];
+  return { ai: flags.ai === true, webmcp: flags.webmcp === true, catalog };
 }
 
 const flags = readFlags();
 const plugins = [
   ...(flags.ai ? [aiPlugin] : []),
-  ...(flags.webmcp ? webmcpPlugins : [])
+  ...(flags.webmcp ? webmcpPlugins : []),
+  ...(flags.catalog.length > 0 ? [catalogStatusPlugin(flags.catalog)] : [])
 ];
 
 export default plugins;

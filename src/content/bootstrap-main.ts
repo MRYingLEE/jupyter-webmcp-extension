@@ -10,43 +10,66 @@
 import {
   CONFIG_ELEMENT_ID,
   federatedEntryUrl,
-  parsePageConfig,
-  RUNTIME_PACKAGE
+  parsePageConfig
 } from '../shared/config';
 import {
   RUNTIME_BASE_ATTRIBUTE,
   STATUS_EVENT
 } from '../../runtime/src/channel';
-import { decideInjection, injectRuntime, needsRuntime } from '../shared/decision';
+import { CatalogBuilds } from '../shared/catalog';
+import {
+  decideInjection,
+  injectRuntime,
+  injectedEntries,
+  needsRuntime
+} from '../shared/decision';
 import { allowsTools, mayInjectRuntime } from '../shared/frame-policy';
+import { SELECTION_KEY, selectionFor } from '../shared/selection';
 
-/** The state the hook keeps for one page. */
-interface IHookState {
-  lastText?: string;
-  lastResult?: string;
-  entryUrl?: string;
-  entryLoad?: string;
-  /** The absolute URL the page was asked to load the runtime from. */
-  requestedSrc?: string;
+/** A federated entry the hook maps to the extension's bundled copy. */
+interface IMappedEntry {
+  /** The status component reporting on this entry. */
+  component: string;
+  /** The absolute URL JupyterLab is expected to load. */
+  url: string;
+  /** The bundled file, relative to the runtime base URL. */
+  path: string;
+  /** The absolute URL the page was asked to load after mapping. */
+  requested?: string;
   /** Whether the request was mapped to the extension's copy. */
   granted?: boolean;
 }
 
+/** The state the hook keeps for one page. */
+interface IHookState {
+  lastText?: string;
+  lastSelection?: string | null;
+  lastResult?: string;
+  entries: IMappedEntry[];
+}
+
 /** What the hook needs to know about the frame it runs in. */
 interface IHookEnv {
+  target: Window;
   load: string;
+  builds: CatalogBuilds;
   toolsAllowed: boolean;
-  report: (detail: string) => void;
+  report: (component: string, detail: string) => void;
 }
 
 /**
  * Install the hook on a window.
  *
  * `load` is the path of the runtime's remote entry relative to its package
- * directory, for example `static/remoteEntry.<hash>.js`.
+ * directory, for example `static/remoteEntry.<hash>.js`. `builds` maps each
+ * catalog id to its bundled load path and module.
  */
-export function installPageHook(target: Window, load: string): void {
-  const state: IHookState = {};
+export function installPageHook(
+  target: Window,
+  load: string,
+  builds: CatalogBuilds
+): void {
+  const state: IHookState = { entries: [] };
   const doc = target.document;
   const views = target as unknown as {
     Node: typeof Node;
@@ -54,31 +77,36 @@ export function installPageHook(target: Window, load: string): void {
     Element: typeof Element;
   };
   const env: IHookEnv = {
+    target,
     load,
+    builds,
     toolsAllowed: mayInjectRuntime({
       isTop: target.top === target,
       allowsTools: allowsTools(doc)
     }),
-    report: detail => reportRuntimeFailure(doc, detail)
+    report: (component, detail) => reportFailure(doc, component, detail)
   };
 
-  // A failed load of the runtime entry, from the extension or from the server,
-  // is reported so the popup and badge show it.
+  // A failed load of an injected entry, from the extension or from the
+  // server, is reported under its component so the popup and badge show it.
   target.addEventListener(
     'error',
     event => {
       const element = event.target;
-      if (
-        !(element instanceof views.HTMLScriptElement) ||
-        state.requestedSrc === undefined ||
-        element.src !== state.requestedSrc
-      ) {
+      if (!(element instanceof views.HTMLScriptElement)) {
+        return;
+      }
+      const entry = state.entries.find(
+        candidate => candidate.requested === element.src
+      );
+      if (!entry) {
         return;
       }
       env.report(
-        state.granted
-          ? 'Runtime script failed to load.'
-          : 'Runtime is not enabled for this frame.'
+        entry.component,
+        entry.granted
+          ? 'Script failed to load.'
+          : 'Not enabled for this frame.'
       );
     },
     true
@@ -135,60 +163,87 @@ export function installPageHook(target: Window, load: string): void {
 }
 
 /**
- * Return the configuration text with the runtime added, when it is needed.
+ * Return the configuration text with the runtime and the selected catalog
+ * entries added, when any is needed.
+ *
+ * The selection is read on every call, because the popup may change it
+ * between reads; an unchanged text and selection return the cached result.
  */
 function rewriteConfigText(text: string, env: IHookEnv, state: IHookState): string {
-  if (state.lastText === text && state.lastResult !== undefined) {
+  const raw = readSelection(env.target);
+  if (
+    state.lastText === text &&
+    state.lastSelection === raw &&
+    state.lastResult !== undefined
+  ) {
     return state.lastResult;
   }
   let result = text;
+  state.entries = [];
   const config = parsePageConfig(text);
   if (config) {
-    const decision = decideInjection(config);
+    const selected = selectionFor(raw, config.baseUrl);
+    const decision = decideInjection(config, selected);
     if (needsRuntime(decision)) {
       if (env.toolsAllowed) {
-        const injected = injectRuntime(config, decision, env.load);
+        const injected = injectRuntime(config, decision, env.load, env.builds);
         result = JSON.stringify(injected);
-        state.entryUrl = federatedEntryUrl(config, RUNTIME_PACKAGE, env.load);
-        state.entryLoad = env.load;
+        state.entries = injectedEntries(decision, env.load, env.builds).map(
+          entry => ({
+            component: entry.component,
+            url: federatedEntryUrl(config, entry.name, entry.load),
+            path: entry.path
+          })
+        );
       } else {
-        env.report('The embedding frame does not allow the tools permission.');
+        env.report('runtime', 'The embedding frame does not allow the tools permission.');
       }
     }
   }
   state.lastText = text;
+  state.lastSelection = raw;
   state.lastResult = result;
   return result;
 }
 
 /**
- * Map the runtime entry URL to the extension copy, and leave other URLs alone.
+ * The raw selection record, or `null` when the frame cannot read its storage.
+ */
+function readSelection(target: Window): string | null {
+  try {
+    return target.sessionStorage.getItem(SELECTION_KEY);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Map an injected entry's URL to the extension copy, and leave other URLs alone.
  *
  * The extension base is read from the document attribute set by the isolated
  * bridge, because the MAIN world cannot call the extension APIs. Without the
  * base, the entry is left unmapped and its load fails, which is reported.
  */
 function mapScriptUrl(value: string, doc: Document, state: IHookState): string {
-  if (!state.entryUrl) {
-    return value;
-  }
   const resolved = new URL(value, doc.baseURI).href;
-  const entry = new URL(state.entryUrl, doc.baseURI).href;
-  if (resolved !== entry) {
+  const entry = state.entries.find(
+    candidate => new URL(candidate.url, doc.baseURI).href === resolved
+  );
+  if (!entry) {
     return value;
   }
   const base = doc.documentElement?.getAttribute(RUNTIME_BASE_ATTRIBUTE);
-  state.granted = Boolean(base);
-  const mapped = base ? `${base}${state.entryLoad}` : value;
-  state.requestedSrc = new URL(mapped, doc.baseURI).href;
+  entry.granted = Boolean(base);
+  const mapped = base ? `${base}${entry.path}` : value;
+  entry.requested = new URL(mapped, doc.baseURI).href;
   return mapped;
 }
 
-/** Report that the runtime could not be provided to this frame. */
-function reportRuntimeFailure(doc: Document, detail: string): void {
+/** Report that a component could not be provided to this frame. */
+function reportFailure(doc: Document, component: string, detail: string): void {
   doc.dispatchEvent(
     new CustomEvent(STATUS_EVENT, {
-      detail: JSON.stringify({ component: 'runtime', state: 'failed', detail })
+      detail: JSON.stringify({ component, state: 'failed', detail })
     })
   );
 }

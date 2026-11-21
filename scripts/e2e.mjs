@@ -92,7 +92,8 @@ async function enable(context, extensionId, origin) {
   assert.equal(result.ok, true, `enable ${origin} failed: ${JSON.stringify(result)}`);
 }
 
-const isReady = entry => Object.keys(entry.components).length === 2;
+// The runtime always reports the AI and WebMCP components. Catalog components are extra and vary per page.
+const isReady = entry => ['ai', 'webmcp'].every(key => key in entry.components);
 
 async function readStatuses(worker, origin) {
   const statuses = await worker.evaluate(
@@ -414,6 +415,111 @@ async function checkReload(context, worker, base) {
   console.log(`ok ${base} (reload)`);
 }
 
+// Catalog extensions are injected per tab from a selection the popup stores in sessionStorage (the key is
+// `jupyter-webmcp-extension:catalog-selection`). With no record for the Jupyter instance, the default selection
+// (anywidget 0.11) applies. A record with no ids opts the instance out. The selection names the instance by
+// baseUrl, so a record for another instance in the same tab is ignored. The page hook reads the selection before
+// JupyterLab starts, so the selection is written on a same-origin page and /lab is loaded afterwards.
+const CATALOG_SELECTION_KEY = 'jupyter-webmcp-extension:catalog-selection';
+const CATALOG_ID = 'anywidget-0.11';
+
+async function pageConfig(base) {
+  const html = await (await fetch(`${base}/lab`)).text();
+  const match = html.match(/<script id="jupyter-config-data"[^>]*>([\s\S]*?)<\/script>/);
+  assert.ok(match, `${base}: no #jupyter-config-data in /lab`);
+  return JSON.parse(match[1]);
+}
+
+async function openLabWithSelection(context, base, record) {
+  const page = await context.newPage();
+  await page.goto(`${base}/api/status`, { waitUntil: 'load' });
+  await page.evaluate(
+    ([key, value]) => (value === null ? sessionStorage.removeItem(key) : sessionStorage.setItem(key, value)),
+    [CATALOG_SELECTION_KEY, record]
+  );
+  await page.goto(`${base}/lab`, { waitUntil: 'load' });
+  return page;
+}
+
+function anywidgetNotebook() {
+  const source = [
+    'import anywidget, traitlets\n',
+    'class Probe(anywidget.AnyWidget):\n',
+    '    _esm = "export function render({ model, el }) { el.textContent = \'probe \' + model.get(\'value\'); }"\n',
+    '    value = traitlets.Int(7).tag(sync=True)\n',
+    '\n',
+    'Probe()'
+  ];
+  return {
+    cells: [{ cell_type: 'code', execution_count: null, metadata: {}, outputs: [], source }],
+    metadata: { kernelspec: { name: 'python3', display_name: 'Python 3', language: 'python' }, language_info: { name: 'python' } },
+    nbformat: 4,
+    nbformat_minor: 5
+  };
+}
+
+async function checkCatalog(context, worker, base) {
+  const { baseUrl } = await pageConfig(base);
+  assert.equal(typeof baseUrl, 'string', `${base}: config has no baseUrl`);
+  const catalogActive = item => item.components[CATALOG_ID]?.state === 'active';
+
+  // With no saved record, the default selection applies.
+  const plain = await openLabWithSelection(context, base, null);
+  await until(
+    async () => (await readStatuses(worker, base)).find(catalogActive),
+    `${base}: default ${CATALOG_ID} active`
+  );
+  await plain.close();
+
+  // A record written for another Jupyter instance in the same tab is ignored, so the default still applies.
+  const otherInstance = await openLabWithSelection(
+    context,
+    base,
+    JSON.stringify({ baseUrl: `${baseUrl}other-instance/`, ids: [] })
+  );
+  await until(
+    async () => (await readStatuses(worker, base)).find(catalogActive),
+    `${base}: default ${CATALOG_ID} active with another instance's record`
+  );
+  await otherInstance.close();
+
+  // An empty record for this instance opts it out of the default.
+  const optOut = await openLabWithSelection(context, base, JSON.stringify({ baseUrl, ids: [] }));
+  await waitForStatuses(worker, base);
+  assert.ok(
+    (await readStatuses(worker, base)).every(item => !(CATALOG_ID in item.components)),
+    `${base}: catalog component reported after opting out`
+  );
+  await optOut.close();
+
+  const lab = await openLabWithSelection(context, base, JSON.stringify({ baseUrl, ids: [CATALOG_ID] }));
+  await until(
+    async () => (await readStatuses(worker, base)).find(catalogActive),
+    `${base}: ${CATALOG_ID} active`
+  );
+
+  // The notebook is opened by URL, so the selection must survive a navigation within the tab.
+  const name = `jwe-e2e-anywidget-${Date.now()}`;
+  const put = await fetch(`${base}/api/contents/${name}.ipynb`, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ type: 'notebook', content: anywidgetNotebook() })
+  });
+  assert.ok(put.ok, `${base}: could not create ${name}.ipynb (${put.status})`);
+  // `?reset` restores the default layout; a restored layout can leave the notebook panel collapsed.
+  await lab.goto(`${base}/lab/tree/${name}.ipynb?reset`, { waitUntil: 'load' });
+  await lab.waitForSelector('.jp-Notebook .jp-CodeCell');
+  await lab.locator('.jp-CodeCell .jp-InputArea-editor').first().click();
+  await lab.keyboard.press('Shift+Enter');
+  await until(
+    () => lab.evaluate(() => document.querySelector('.jp-OutputArea')?.textContent.includes('probe 7') ?? false),
+    `${base}: anywidget output rendered`
+  );
+  await lab.close();
+  await fetch(`${base}/api/contents/${name}.ipynb`, { method: 'DELETE' });
+      console.log(`ok ${base} (catalog ${CATALOG_ID}: default, opt-out, per-tab selection, anywidget renders)`);
+}
+
 async function runSuite(webmcpFlag) {
   const { context, worker, extensionId, close } = await launch(webmcpFlag);
   try {
@@ -428,6 +534,9 @@ async function runSuite(webmcpFlag) {
         await checkIframe(context, worker, base, { allowTools: true });
         await checkMultipleTabs(context, worker, base);
         await checkReload(context, worker, base);
+        if (!(await isLite(base))) {
+          await checkCatalog(context, worker, base);
+        }
       }
     }
   } finally {
