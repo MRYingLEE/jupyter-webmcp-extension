@@ -8,6 +8,7 @@
   "scripts": {
     "build:runtime": "npm --prefix runtime run build",
     "build:catalog": "node scripts/build-catalog.mjs",
+    "build:manifest": "node scripts/make-runtime-manifest.mjs",
     "build": "npm run build:runtime && node scripts/build.mjs",
     "build:e2e": "npm run build:runtime && node scripts/build.mjs --e2e",
     "package": "npm run build && python3 scripts/package.py",

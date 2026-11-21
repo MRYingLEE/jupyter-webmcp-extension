@@ -52,9 +52,42 @@ export interface IEmbeddedStatus extends ITabStatus {
   frameId: number;
 }
 
+/** Ask for the verified runtime artifacts, for the bridge of an enabled origin. */
+export interface IRuntimeArtifactsMessage {
+  type: 'runtimeArtifacts';
+}
+
+/** Fetch, verify, and store the runtime catalog from a manifest URL. */
+export interface IRefreshRuntimeCatalogMessage {
+  type: 'refreshRuntimeCatalog';
+  manifestUrl: string;
+}
+
+/** Remove the stored runtime catalog. */
+export interface IClearRuntimeCatalogMessage {
+  type: 'clearRuntimeCatalog';
+}
+
+/** Ask for the stored runtime catalog's state. */
+export interface IRuntimeCatalogStateMessage {
+  type: 'runtimeCatalogState';
+}
+
+/** The stored runtime catalog: its manifest, when it was fetched, and the verified versions. */
+export interface IRuntimeCatalogState {
+  manifestUrl?: string;
+  fetchedAt?: number;
+  /** The verified version of each catalog id that the store holds. */
+  versions: Record<string, string>;
+}
+
 /** Messages handled by the service worker. */
 export type ExtensionMessage =
   | IStatusMessage
   | IEnableMessage
   | IDisableMessage
-  | IStateMessage;
+  | IStateMessage
+  | IRuntimeArtifactsMessage
+  | IRefreshRuntimeCatalogMessage
+  | IClearRuntimeCatalogMessage
+  | IRuntimeCatalogStateMessage;

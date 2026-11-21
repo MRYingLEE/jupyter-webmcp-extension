@@ -7,6 +7,7 @@
  */
 
 import {
+  RUNTIME_ARTIFACTS_ATTRIBUTE,
   RUNTIME_BASE_ATTRIBUTE,
   SETTINGS_CHANGED,
   SETTINGS_REQUEST,
@@ -19,6 +20,12 @@ import { isRecord } from '../shared/config';
 import { allowsTools, mayGrantRuntime } from '../shared/frame-policy';
 import { ENABLED_ORIGINS_KEY, SETTINGS_STORAGE_KEY } from '../shared/storage';
 import { ExtensionMessage } from '../shared/messages';
+import {
+  IRuntimeArtifactPayload,
+  RUNTIME_CACHE_KEY,
+  blobArtifacts,
+  payloadsFrom
+} from '../shared/runtime-catalog';
 
 const runtimeBase = chrome.runtime.getURL('runtime/');
 
@@ -29,25 +36,72 @@ function isStatusComponent(component: string): boolean {
   return RUNTIME_COMPONENTS.has(component) || CATALOG_IDS.has(component);
 }
 
-function setRuntimeBase(): boolean {
-  const root = document.documentElement;
-  if (!root) {
-    return false;
-  }
-  root.setAttribute(RUNTIME_BASE_ATTRIBUTE, runtimeBase);
-  return true;
-}
-
-function grantRuntime(): void {
-  if (setRuntimeBase()) {
+/** Set an attribute on `<html>` as soon as the document element exists. */
+function setRootAttribute(name: string, value: string): void {
+  const apply = (): boolean => {
+    const root = document.documentElement;
+    if (!root) {
+      return false;
+    }
+    root.setAttribute(name, value);
+    return true;
+  };
+  if (apply()) {
     return;
   }
   const observer = new MutationObserver(() => {
-    if (setRuntimeBase()) {
+    if (apply()) {
       observer.disconnect();
     }
   });
   observer.observe(document, { childList: true, subtree: true });
+}
+
+/** The verified runtime payloads the service worker holds, by catalog id. Empty when none are stored. */
+async function runtimePayloads(): Promise<Record<string, IRuntimeArtifactPayload>> {
+  const message: ExtensionMessage = { type: 'runtimeArtifacts' };
+  const response: unknown = await chrome.runtime.sendMessage(message);
+  if (!isRecord(response) || response.ok !== true) {
+    return {};
+  }
+  return payloadsFrom(response.artifacts);
+}
+
+/**
+ * Keep the verified payloads for the page hook's synchronous read on the next
+ * load. An empty set removes the cache, and a cache that cannot be written is
+ * removed too, so an older build is not served after a refresh.
+ */
+function cacheRuntimePayloads(payloads: Record<string, IRuntimeArtifactPayload>): void {
+  try {
+    if (Object.keys(payloads).length === 0) {
+      localStorage.removeItem(RUNTIME_CACHE_KEY);
+      return;
+    }
+    const text = JSON.stringify(payloads);
+    if (localStorage.getItem(RUNTIME_CACHE_KEY) !== text) {
+      localStorage.setItem(RUNTIME_CACHE_KEY, text);
+    }
+  } catch (error) {
+    console.warn('Unable to cache the runtime extension catalog:', error);
+    try {
+      localStorage.removeItem(RUNTIME_CACHE_KEY);
+    } catch {
+      // Without storage there is no cache to remove.
+    }
+  }
+}
+
+function grantRuntime(): void {
+  setRootAttribute(RUNTIME_BASE_ATTRIBUTE, runtimeBase);
+  void runtimePayloads()
+    .then(payloads => {
+      cacheRuntimePayloads(payloads);
+      setRootAttribute(RUNTIME_ARTIFACTS_ATTRIBUTE, JSON.stringify(blobArtifacts(payloads)));
+    })
+    .catch((error: unknown) => {
+      console.error('Unable to load the runtime extension catalog:', error);
+    });
 }
 
 async function frameMayBeGranted(): Promise<boolean> {

@@ -11,6 +11,12 @@ import type {
   ITabStatus
 } from '../shared/messages';
 import type { IRuntimeStatus } from '../../runtime/src/channel';
+import {
+  clearRuntimeCatalog,
+  refreshRuntimeCatalog,
+  runtimeArtifactPayloads,
+  runtimeCatalogState
+} from './runtime-catalog';
 
 const TAB_STATUS_KEY = 'tabStatus';
 const FRAME_STATUS_KEY = 'frameStatus';
@@ -273,6 +279,40 @@ async function handleMessage(
       }
       return response;
     }
+    case 'runtimeArtifacts': {
+      // Only a bridge in an enabled origin may receive the runtime bytes.
+      const origin = webOrigin(sender.url);
+      if (
+        sender.id !== chrome.runtime.id ||
+        sender.tab?.id === undefined ||
+        !origin ||
+        !(await enabledOrigins()).includes(origin)
+      ) {
+        return { ok: false, error: 'Not allowed.' };
+      }
+      return { ok: true, artifacts: await runtimeArtifactPayloads() };
+    }
+    case 'refreshRuntimeCatalog': {
+      if (!isExtensionPage(sender)) {
+        return { ok: false, error: 'Not allowed.' };
+      }
+      try {
+        return { ok: true, state: await refreshRuntimeCatalog(message.manifestUrl) };
+      } catch (error) {
+        return { ok: false, error: error instanceof Error ? error.message : String(error) };
+      }
+    }
+    case 'clearRuntimeCatalog':
+      if (!isExtensionPage(sender)) {
+        return { ok: false, error: 'Not allowed.' };
+      }
+      await clearRuntimeCatalog();
+      return { ok: true };
+    case 'runtimeCatalogState':
+      if (!isExtensionPage(sender)) {
+        return { ok: false, error: 'Not allowed.' };
+      }
+      return { ok: true, state: await runtimeCatalogState() };
   }
 }
 

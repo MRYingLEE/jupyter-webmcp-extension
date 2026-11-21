@@ -9,6 +9,9 @@ import { CATALOG, catalogEntry } from '../shared/catalog';
 import { CatalogState, decideInjection } from '../shared/decision';
 import { parsePageConfig } from '../shared/config';
 import { SELECTION_KEY, selectionFor, serializeSelection } from '../shared/selection';
+import { CATALOG_SOURCES_ATTRIBUTE } from '../../runtime/src/channel';
+import type { ICatalogSource } from '../shared/runtime-catalog';
+import type { IRuntimeCatalogState } from '../shared/messages';
 
 const originLabel = document.getElementById('origin') as HTMLElement;
 const message = document.getElementById('message') as HTMLElement;
@@ -44,6 +47,8 @@ let catalogBaseUrl: string | null = null;
 interface IPageSnapshot {
   configText: string | null;
   selection: string | null;
+  /** The JSON record of how each catalog entry is provided, as the page hook reports it. */
+  sources: string | null;
 }
 
 function componentLabel(component: string): string {
@@ -123,9 +128,9 @@ async function readPage(id: number): Promise<IPageSnapshot | null> {
     const [injection] = await chrome.scripting.executeScript({
       target: { tabId: id, frameIds: [0] },
       world: 'MAIN',
-      args: [SELECTION_KEY],
+      args: [SELECTION_KEY, CATALOG_SOURCES_ATTRIBUTE],
       // `text` is read instead of `textContent`, which the page hook rewrites.
-      func: (key: string) => {
+      func: (key: string, sourcesAttribute: string) => {
         const element = document.getElementById('jupyter-config-data') as HTMLScriptElement | null;
         let selection: string | null = null;
         try {
@@ -133,7 +138,11 @@ async function readPage(id: number): Promise<IPageSnapshot | null> {
         } catch {
           selection = null;
         }
-        return { configText: element ? element.text : null, selection };
+        return {
+          configText: element ? element.text : null,
+          selection,
+          sources: document.documentElement.getAttribute(sourcesAttribute)
+        };
       }
     });
     return (injection?.result as IPageSnapshot | undefined) ?? null;
@@ -162,6 +171,53 @@ async function writeSelection(id: number, value: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+/** Parse the page's catalog sources record. Unknown or malformed records yield none. */
+function parseSources(text: string | null): Record<string, ICatalogSource> {
+  if (!text) {
+    return {};
+  }
+  try {
+    const parsed: unknown = JSON.parse(text);
+    return parsed && typeof parsed === 'object' ? (parsed as Record<string, ICatalogSource>) : {};
+  } catch {
+    return {};
+  }
+}
+
+/** The stored runtime catalog's verified versions, by catalog id. */
+async function verifiedVersions(): Promise<Record<string, string>> {
+  try {
+    const response = (await chrome.runtime.sendMessage({
+      type: 'runtimeCatalogState'
+    })) as { ok: boolean; state?: IRuntimeCatalogState };
+    return response.ok && response.state ? response.state.versions : {};
+  } catch {
+    return {};
+  }
+}
+
+/** Describe where the page gets an entry's code: the verified runtime, the bundled build, or nothing. */
+function sourceDetail(
+  id: string,
+  sources: Record<string, ICatalogSource>,
+  verified: Record<string, string>
+): string | null {
+  const source = sources[id];
+  if (!source) {
+    return null;
+  }
+  if (source.source === 'runtime') {
+    return `Loaded from verified runtime${source.version ? ` ${source.version}` : ''}`;
+  }
+  if (source.source === 'blocked') {
+    return 'Blocked by the page CSP; the bundled build is used for this tab';
+  }
+  const available = verified[id];
+  return available
+    ? `Bundled build. Verified runtime ${available} is stored; reload to apply it`
+    : 'Bundled build';
 }
 
 /** The labels of a catalog entry's state and its kernel requirement, if any. */
@@ -213,6 +269,8 @@ async function renderCatalog(id: number, enabled: boolean): Promise<void> {
 
   const selected = selectionFor(snapshot.selection, config.baseUrl);
   const decision = decideInjection(config, selected);
+  const sources = parseSources(snapshot.sources);
+  const verified = await verifiedVersions();
   for (const entry of CATALOG) {
     const item = document.createElement('li');
     const state = decision.catalog[entry.id];
@@ -227,9 +285,14 @@ async function renderCatalog(id: number, enabled: boolean): Promise<void> {
     } else {
       item.append(entry.label);
     }
+    const lines = catalogDetails(entry.id, state);
+    const source = sourceDetail(entry.id, sources, verified);
+    if (source) {
+      lines.push(source);
+    }
     const detail = document.createElement('div');
     detail.className = 'status-detail';
-    detail.textContent = catalogDetails(entry.id, state).join('. ');
+    detail.textContent = lines.join('. ');
     item.append(detail);
     catalogList.append(item);
   }

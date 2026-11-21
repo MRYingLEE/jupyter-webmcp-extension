@@ -25,6 +25,12 @@ export interface IRuntimeFlags {
 /** The attribute of `<html>` holding the extension's runtime base URL. */
 export const RUNTIME_BASE_ATTRIBUTE = 'data-jwe-runtime-base';
 
+/** The attribute of `<html>` holding the verified runtime artifacts, as JSON. */
+export const RUNTIME_ARTIFACTS_ATTRIBUTE = 'data-jwe-runtime-artifacts';
+
+/** The attribute of `<html>` holding each catalog id's source (runtime, bundled, or blocked), as JSON. */
+export const CATALOG_SOURCES_ATTRIBUTE = 'data-jwe-catalog-sources';
+
 /** Dispatched by the runtime to ask for the settings; `detail` is `{nonce}` JSON. */
 export const SETTINGS_REQUEST = 'jupyter-webmcp-extension:settings-request';
 

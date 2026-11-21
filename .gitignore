@@ -4,3 +4,4 @@ dist-e2e/
 runtime/lib/
 runtime/labextension/
 runtime/catalog/
+dist-catalog/

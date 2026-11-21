@@ -54,6 +54,19 @@ textarea {
   font-size: 13px;
 }
 
+.field {
+  display: block;
+  margin: 8px 0;
+}
+
+.field input {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  margin-top: 4px;
+  font-size: 13px;
+}
+
 .message {
   margin: 8px 0;
   padding: 6px 8px;

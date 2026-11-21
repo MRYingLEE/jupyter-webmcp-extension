@@ -34,6 +34,16 @@ The design and the decisions behind it are in
   the popup shows which catalog entries are active. Each anywidget line matches
   the kernel's anywidget minor version. Catalog entries never replace an
   extension the deployment already provides.
+- Runtime catalog: a catalog entry can also come from a remote manifest set on
+  the options page. The manifest lists each build's files with sha256 hashes.
+  The extension fetches the manifest and the files, verifies every hash, and
+  stores them only when all of them pass. A verified build replaces the bundled
+  one for the entries the manifest names; otherwise the bundled build is used.
+  The verified files are kept per origin in `localStorage`, so later page loads
+  use them before the service worker replies. After a refresh, the first load of
+  an origin still uses the previously stored build. If the page's CSP blocks a
+  verified build, the tab uses the bundled build until the verified version
+  changes.
 - A catalog selection is kept in `sessionStorage` for the tab and the Jupyter
   instance (origin and base URL). Anywidget 0.11 is selected by default, so an
   instance with no saved selection gets it; saving with no extensions checked
@@ -61,6 +71,11 @@ npm run package       # builds dist/ and creates jupyter-webmcp-extension.zip
 checkout in `ANYWIDGET_SOURCE` (for the 0.10 line, the pinned commit must be
 present in that checkout). It writes `runtime/catalog/<id>/`, which is
 git-ignored. `build` does not run `build:catalog` for you.
+
+`npm run build:manifest` writes a runtime manifest to `dist-catalog/` from the
+built `runtime/catalog/`. Serve that folder over `https` (or `http` on
+`localhost`) and enter the manifest URL on the options page, then choose
+"Fetch and verify".
 
 The ZIP is ready to unzip and load as an unpacked extension. It contains the
 production build (without source maps). `npm run build` alone creates `dist/`.
@@ -171,3 +186,8 @@ selection (anywidget 0.11 for a tab with no saved selection), an opt-out with an
 empty selection, that the other tab and other instances are unaffected, and that
 a notebook anywidget renders. That check needs the anywidget 0.11 package in
 the server's kernel environment and `runtime/catalog/anywidget-0.11` built.
+
+The JupyterLab server itself must not have anywidget's labextension installed.
+If it does, the catalog marks `anywidget-0.11` as a conflict and the check fails.
+The server must also run with `--ServerApp.disable_check_xsrf=True`, because the
+harness writes a notebook with an unauthenticated `PUT /api/contents`.

@@ -13,10 +13,24 @@ import {
   parsePageConfig
 } from '../shared/config';
 import {
+  CATALOG_SOURCES_ATTRIBUTE,
+  RUNTIME_ARTIFACTS_ATTRIBUTE,
   RUNTIME_BASE_ATTRIBUTE,
   STATUS_EVENT
 } from '../../runtime/src/channel';
-import { CatalogBuilds } from '../shared/catalog';
+import { CATALOG_IDS, CatalogBuilds } from '../shared/catalog';
+import {
+  BLOCKED_KEY_PREFIX,
+  ICatalogSource,
+  IRuntimeArtifact,
+  RUNTIME_CACHE_KEY,
+  blobArtifacts,
+  filePathOf,
+  mergeBuilds,
+  parseArtifacts,
+  payloadsFrom,
+  usableArtifacts
+} from '../shared/runtime-catalog';
 import {
   decideInjection,
   injectRuntime,
@@ -38,14 +52,30 @@ interface IMappedEntry {
   requested?: string;
   /** Whether the request was mapped to the extension's copy. */
   granted?: boolean;
+  /** The verified runtime build serving this entry, when one is used. */
+  build?: IRuntimeBuild;
+}
+
+/** A verified runtime file served from a blob URL, with the catalog id and version it belongs to. */
+interface IRuntimeBuild {
+  url: string;
+  component: string;
+  version: string;
 }
 
 /** The state the hook keeps for one page. */
 interface IHookState {
   lastText?: string;
-  lastSelection?: string | null;
+  lastKey?: string;
   lastResult?: string;
   entries: IMappedEntry[];
+  /** Verified chunk URLs by file name. Webpack requests chunks relative to the blob entry, so they are matched by name. */
+  chunks: Map<string, string>;
+  /** Verified files by URL, to find the build behind a load that failed. */
+  owners: Map<string, IRuntimeBuild>;
+  /** The cached payload text the artifact table was last built from, and that table. */
+  cachedFrom?: string;
+  cachedRaw?: string | null;
 }
 
 /** What the hook needs to know about the frame it runs in. */
@@ -69,7 +99,7 @@ export function installPageHook(
   load: string,
   builds: CatalogBuilds
 ): void {
-  const state: IHookState = { entries: [] };
+  const state: IHookState = { entries: [], chunks: new Map(), owners: new Map() };
   const doc = target.document;
   const views = target as unknown as {
     Node: typeof Node;
@@ -94,6 +124,17 @@ export function installPageHook(
     event => {
       const element = event.target;
       if (!(element instanceof views.HTMLScriptElement)) {
+        return;
+      }
+      const owner = state.owners.get(element.src);
+      if (owner) {
+        // A verified build that fails to load is blocked by the page's CSP. The
+        // block is kept for this tab until the verified version changes.
+        markBlocked(env.target, owner);
+        env.report(
+          owner.component,
+          'Blocked by the page. The bundled build is used after reload.'
+        );
         return;
       }
       const entry = state.entries.find(
@@ -166,42 +207,62 @@ export function installPageHook(
  * Return the configuration text with the runtime and the selected catalog
  * entries added, when any is needed.
  *
- * The selection is read on every call, because the popup may change it
- * between reads; an unchanged text and selection return the cached result.
+ * The selection, the runtime artifacts, and the blocked records are read on
+ * every call, because each may change between reads; unchanged inputs return
+ * the cached result.
  */
 function rewriteConfigText(text: string, env: IHookEnv, state: IHookState): string {
   const raw = readSelection(env.target);
-  if (
-    state.lastText === text &&
-    state.lastSelection === raw &&
-    state.lastResult !== undefined
-  ) {
+  const root = env.target.document.documentElement;
+  const artifactsRaw =
+    root?.getAttribute(RUNTIME_ARTIFACTS_ATTRIBUTE) ?? cachedArtifactsRaw(env.target, state);
+  const blocked = readBlocked(env.target);
+  const key = JSON.stringify([raw, artifactsRaw, blocked]);
+  if (state.lastText === text && state.lastKey === key && state.lastResult !== undefined) {
     return state.lastResult;
   }
   let result = text;
   state.entries = [];
+  state.chunks = new Map();
+  state.owners = new Map();
+  const artifacts = parseArtifacts(artifactsRaw);
+  const usable = usableArtifacts(artifacts, blocked);
+  const sources: Record<string, ICatalogSource> = {};
   const config = parsePageConfig(text);
   if (config) {
     const selected = selectionFor(raw, config.baseUrl);
     const decision = decideInjection(config, selected);
     if (needsRuntime(decision)) {
       if (env.toolsAllowed) {
-        const injected = injectRuntime(config, decision, env.load, env.builds);
+        const builds = mergeBuilds(env.builds, usable);
+        const injected = injectRuntime(config, decision, env.load, builds);
         result = JSON.stringify(injected);
-        state.entries = injectedEntries(decision, env.load, env.builds).map(
+        state.entries = injectedEntries(decision, env.load, builds).map(
           entry => ({
             component: entry.component,
             url: federatedEntryUrl(config, entry.name, entry.load),
-            path: entry.path
+            path: entry.path,
+            build: runtimeBuildOf(usable, entry.component)
           })
         );
+        for (const id of CATALOG_IDS) {
+          if (decision.catalog[id] !== 'injected') {
+            continue;
+          }
+          sources[id] = sourceOf(id, artifacts, usable, blocked);
+          const artifact = usable[id];
+          if (artifact) {
+            indexRuntimeFiles(id, artifact, state);
+          }
+        }
       } else {
         env.report('runtime', 'The embedding frame does not allow the tools permission.');
       }
     }
   }
+  root?.setAttribute(CATALOG_SOURCES_ATTRIBUTE, JSON.stringify(sources));
   state.lastText = text;
-  state.lastSelection = raw;
+  state.lastKey = key;
   state.lastResult = result;
   return result;
 }
@@ -218,11 +279,42 @@ function readSelection(target: Window): string | null {
 }
 
 /**
- * Map an injected entry's URL to the extension copy, and leave other URLs alone.
+ * The artifact table built from the origin's cached payloads, for a read before
+ * the bridge has replied. Null when nothing usable is cached.
+ */
+function cachedArtifactsRaw(target: Window, state: IHookState): string | null {
+  let stored: string | null;
+  try {
+    stored = target.localStorage.getItem(RUNTIME_CACHE_KEY);
+  } catch {
+    return null;
+  }
+  if (stored === null) {
+    return null;
+  }
+  if (state.cachedFrom !== stored) {
+    state.cachedFrom = stored;
+    state.cachedRaw = null;
+    try {
+      const payloads = payloadsFrom(JSON.parse(stored));
+      state.cachedRaw = JSON.stringify(blobArtifacts(payloads));
+    } catch {
+      // A cache that is not valid JSON or base64 is ignored, as if absent.
+    }
+  }
+  return state.cachedRaw ?? null;
+}
+
+/**
+ * Map an injected entry's URL to the copy it should load, and leave other URLs alone.
  *
- * The extension base is read from the document attribute set by the isolated
- * bridge, because the MAIN world cannot call the extension APIs. Without the
- * base, the entry is left unmapped and its load fails, which is reported.
+ * An entry with a verified build loads that build's blob. Otherwise it maps to
+ * the bundled copy under the extension base, which the isolated bridge sets on
+ * the document because the MAIN world cannot call the extension APIs. Without
+ * the base, the entry is left unmapped and its load fails, which is reported.
+ *
+ * A chunk of a verified build is matched by file name, because webpack derives
+ * chunk URLs from the entry's blob URL rather than from the verified files.
  */
 function mapScriptUrl(value: string, doc: Document, state: IHookState): string {
   const resolved = new URL(value, doc.baseURI).href;
@@ -230,13 +322,93 @@ function mapScriptUrl(value: string, doc: Document, state: IHookState): string {
     candidate => new URL(candidate.url, doc.baseURI).href === resolved
   );
   if (!entry) {
-    return value;
+    const chunk = state.chunks.get(new URL(resolved).pathname.split('/').pop() ?? '');
+    return chunk ?? value;
   }
-  const base = doc.documentElement?.getAttribute(RUNTIME_BASE_ATTRIBUTE);
-  entry.granted = Boolean(base);
-  const mapped = base ? `${base}${entry.path}` : value;
+  let mapped: string;
+  if (entry.build) {
+    mapped = entry.build.url;
+    entry.granted = true;
+  } else {
+    const base = doc.documentElement?.getAttribute(RUNTIME_BASE_ATTRIBUTE);
+    entry.granted = Boolean(base);
+    mapped = base ? `${base}${entry.path}` : value;
+  }
   entry.requested = new URL(mapped, doc.baseURI).href;
   return mapped;
+}
+
+/** Read the verified versions the page blocked earlier in this tab. */
+function readBlocked(target: Window): Record<string, string> {
+  const blocked: Record<string, string> = {};
+  try {
+    for (const id of CATALOG_IDS) {
+      const version = target.sessionStorage.getItem(BLOCKED_KEY_PREFIX + id);
+      if (version !== null) {
+        blocked[id] = version;
+      }
+    }
+  } catch {
+    // Without storage, no block is known.
+  }
+  return blocked;
+}
+
+/**
+ * Record that the page blocked a verified build, so later reads use the
+ * bundled build until the verified version changes.
+ */
+function markBlocked(target: Window, build: IRuntimeBuild): void {
+  try {
+    target.sessionStorage.setItem(BLOCKED_KEY_PREFIX + build.component, build.version);
+  } catch {
+    // Without storage, the next load tries the verified build again.
+  }
+}
+
+/** The verified build serving a catalog entry, or `undefined` when none is usable. */
+function runtimeBuildOf(
+  usable: Record<string, IRuntimeArtifact>,
+  id: string
+): IRuntimeBuild | undefined {
+  const artifact = usable[id];
+  if (!artifact) {
+    return undefined;
+  }
+  return {
+    url: artifact.urls[filePathOf(artifact.load)],
+    component: id,
+    version: artifact.version
+  };
+}
+
+/** Index a verified build's files: by URL for block reports, and its chunks by file name. */
+function indexRuntimeFiles(id: string, artifact: IRuntimeArtifact, state: IHookState): void {
+  for (const [path, url] of Object.entries(artifact.urls)) {
+    state.owners.set(url, { url, component: id, version: artifact.version });
+    const name = path.slice(path.lastIndexOf('/') + 1);
+    if (path.endsWith('.js') && !state.chunks.has(name)) {
+      state.chunks.set(name, url);
+    }
+  }
+}
+
+/** How a catalog entry is provided to the page: a usable verified build, a blocked one, or the bundled one. */
+function sourceOf(
+  id: string,
+  artifacts: Record<string, IRuntimeArtifact>,
+  usable: Record<string, IRuntimeArtifact>,
+  blocked: Record<string, string>
+): ICatalogSource {
+  const served = usable[id];
+  if (served) {
+    return { source: 'runtime', version: served.version };
+  }
+  const artifact = artifacts[id];
+  if (artifact && blocked[id] === artifact.version) {
+    return { source: 'blocked', version: artifact.version };
+  }
+  return { source: 'bundled' };
 }
 
 /** Report that a component could not be provided to this frame. */

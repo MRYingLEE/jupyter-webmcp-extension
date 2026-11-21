@@ -19,6 +19,27 @@
     </section>
 
     <section>
+      <h2>Runtime extensions</h2>
+      <p class="muted">
+        Jupyter extensions can be loaded at runtime from a manifest URL instead
+        of the bundled builds. Each file is checked against its sha256 before it
+        is stored, and a failed check keeps the previous catalog. The bundled
+        builds are used when no verified runtime applies. Pages pick up a new
+        catalog after they reload.
+      </p>
+      <label class="field">
+        Manifest URL
+        <input id="manifest-url" type="url" spellcheck="false" placeholder="https://example.com/runtime-catalog.json" />
+      </label>
+      <div class="actions">
+        <button id="fetch-catalog" type="button">Fetch and verify</button>
+        <button id="clear-catalog" type="button">Clear stored catalog</button>
+      </div>
+      <div id="catalog-message" class="message" hidden></div>
+      <ul id="catalog-state" class="sites"></ul>
+    </section>
+
+    <section>
       <h2>WebMCP settings</h2>
       <p class="muted">
         JSON object with the settings of the WebMCP plugin: <code>tools</code>,
