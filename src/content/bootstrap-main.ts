@@ -18,7 +18,7 @@ import {
   RUNTIME_BASE_ATTRIBUTE,
   STATUS_EVENT
 } from '../../runtime/src/channel';
-import { CATALOG_IDS, CatalogBuilds } from '../shared/catalog';
+import { CatalogBuilds } from '../shared/catalog';
 import {
   BLOCKED_KEY_PREFIX,
   ICatalogSource,
@@ -26,7 +26,6 @@ import {
   RUNTIME_CACHE_KEY,
   blobArtifacts,
   filePathOf,
-  mergeBuilds,
   parseArtifacts,
   payloadsFrom,
   usableArtifacts
@@ -35,24 +34,25 @@ import {
   decideInjection,
   injectRuntime,
   injectedEntries,
-  needsRuntime
+  needsRuntime,
+  packageEntries
 } from '../shared/decision';
 import { allowsTools, mayInjectRuntime } from '../shared/frame-policy';
 import { SELECTION_KEY, selectionFor } from '../shared/selection';
 
-/** A federated entry the hook maps to the extension's bundled copy. */
+/** A federated entry the hook maps to the extension's bundled copy or a verified blob. */
 interface IMappedEntry {
   /** The status component reporting on this entry. */
   component: string;
   /** The absolute URL JupyterLab is expected to load. */
   url: string;
-  /** The bundled file, relative to the runtime base URL. */
-  path: string;
+  /** The bundled file, relative to the runtime base URL. Absent for a package. */
+  path?: string;
   /** The absolute URL the page was asked to load after mapping. */
   requested?: string;
   /** Whether the request was mapped to the extension's copy. */
   granted?: boolean;
-  /** The verified runtime build serving this entry, when one is used. */
+  /** The verified build serving this entry, when one is used. */
   build?: IRuntimeBuild;
 }
 
@@ -230,29 +230,28 @@ function rewriteConfigText(text: string, env: IHookEnv, state: IHookState): stri
   const sources: Record<string, ICatalogSource> = {};
   const config = parsePageConfig(text);
   if (config) {
-    const selected = selectionFor(raw, config.baseUrl);
+    const selected = selectionFor(raw, config.baseUrl, Object.keys(usable));
     const decision = decideInjection(config, selected);
-    if (needsRuntime(decision)) {
+    const packages = packageEntries(config, selected, usable);
+    if (needsRuntime(decision) || packages.length > 0) {
       if (env.toolsAllowed) {
-        const builds = mergeBuilds(env.builds, usable);
-        const injected = injectRuntime(config, decision, env.load, builds);
+        const injected = injectRuntime(config, decision, env.load, env.builds, packages);
         result = JSON.stringify(injected);
-        state.entries = injectedEntries(decision, env.load, builds).map(
-          entry => ({
-            component: entry.component,
-            url: federatedEntryUrl(config, entry.name, entry.load),
-            path: entry.path,
-            build: runtimeBuildOf(usable, entry.component)
-          })
-        );
-        for (const id of CATALOG_IDS) {
-          if (decision.catalog[id] !== 'injected') {
+        const entries = injectedEntries(decision, env.load, env.builds, packages);
+        state.entries = entries.map(entry => ({
+          component: entry.component,
+          url: federatedEntryUrl(config, entry.name, entry.load),
+          path: entry.path,
+          build: runtimeBuildOf(usable, entry.component)
+        }));
+        for (const entry of entries) {
+          if (entry.component === 'runtime') {
             continue;
           }
-          sources[id] = sourceOf(id, artifacts, usable, blocked);
-          const artifact = usable[id];
+          sources[entry.component] = sourceOf(entry.component, artifacts, usable, blocked);
+          const artifact = usable[entry.component];
           if (artifact) {
-            indexRuntimeFiles(id, artifact, state);
+            indexRuntimeFiles(entry.component, artifact, state);
           }
         }
       } else {
@@ -331,21 +330,25 @@ function mapScriptUrl(value: string, doc: Document, state: IHookState): string {
     entry.granted = true;
   } else {
     const base = doc.documentElement?.getAttribute(RUNTIME_BASE_ATTRIBUTE);
-    entry.granted = Boolean(base);
-    mapped = base ? `${base}${entry.path}` : value;
+    entry.granted = Boolean(base && entry.path);
+    mapped = base && entry.path ? `${base}${entry.path}` : value;
   }
   entry.requested = new URL(mapped, doc.baseURI).href;
   return mapped;
 }
 
-/** Read the verified versions the page blocked earlier in this tab. */
+/** Read the verified versions the page blocked earlier in this tab, by component. */
 function readBlocked(target: Window): Record<string, string> {
   const blocked: Record<string, string> = {};
   try {
-    for (const id of CATALOG_IDS) {
-      const version = target.sessionStorage.getItem(BLOCKED_KEY_PREFIX + id);
+    for (let index = 0; index < target.sessionStorage.length; index++) {
+      const key = target.sessionStorage.key(index);
+      if (key === null || !key.startsWith(BLOCKED_KEY_PREFIX)) {
+        continue;
+      }
+      const version = target.sessionStorage.getItem(key);
       if (version !== null) {
-        blocked[id] = version;
+        blocked[key.slice(BLOCKED_KEY_PREFIX.length)] = version;
       }
     }
   } catch {

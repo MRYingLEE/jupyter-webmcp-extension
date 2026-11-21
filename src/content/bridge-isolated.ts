@@ -18,6 +18,7 @@ import {
 import { CATALOG_IDS } from '../shared/catalog';
 import { isRecord } from '../shared/config';
 import { allowsTools, mayGrantRuntime } from '../shared/frame-policy';
+import { isPackageId } from '../shared/pypi';
 import { ENABLED_ORIGINS_KEY, SETTINGS_STORAGE_KEY } from '../shared/storage';
 import { ExtensionMessage } from '../shared/messages';
 import {
@@ -33,7 +34,7 @@ const RUNTIME_COMPONENTS: ReadonlySet<string> = new Set(['ai', 'webmcp', 'runtim
 
 /** Whether a reported component is one the runtime or the page hook provides. */
 function isStatusComponent(component: string): boolean {
-  return RUNTIME_COMPONENTS.has(component) || CATALOG_IDS.has(component);
+  return RUNTIME_COMPONENTS.has(component) || CATALOG_IDS.has(component) || isPackageId(component);
 }
 
 /** Set an attribute on `<html>` as soon as the document element exists. */

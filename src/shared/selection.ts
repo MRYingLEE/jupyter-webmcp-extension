@@ -7,44 +7,73 @@
  */
 
 import { isRecord } from './config';
-import { DEFAULT_SELECTION } from './catalog';
+import { CATALOG_EXTENSIONS, DEFAULT_SELECTION } from './catalog';
 
 /** The sessionStorage key holding the selection record. */
 export const SELECTION_KEY = 'jupyter-webmcp-extension:catalog-selection';
 
-/** Serialize the selected catalog ids for one Jupyter instance. */
+/** Serialize the on or off state of each extension id for one Jupyter instance. */
 export function serializeSelection(
   baseUrl: string,
-  ids: readonly string[]
+  states: Readonly<Record<string, boolean>>
 ): string {
-  return JSON.stringify({ baseUrl, ids: [...new Set(ids)] });
+  return JSON.stringify({ baseUrl, states });
 }
 
-/**
- * The selected catalog ids for a Jupyter instance.
- *
- * Without a record for this instance (missing, malformed, or written for
- * another instance) the default selection applies. A record with no ids is an
- * explicit opt-out.
- */
-export function selectionFor(
+/** The saved on or off states for a Jupyter instance, or null without a usable record. */
+function savedStates(
   raw: string | null,
   baseUrl: string | undefined
-): Set<string> {
-  const fallback = new Set(DEFAULT_SELECTION);
+): Map<string, boolean> | null {
   if (raw === null || baseUrl === undefined) {
-    return fallback;
+    return null;
   }
   let data: unknown;
   try {
     data = JSON.parse(raw);
   } catch {
-    return fallback;
+    return null;
   }
-  if (!isRecord(data) || data.baseUrl !== baseUrl || !Array.isArray(data.ids)) {
-    return fallback;
+  if (!isRecord(data) || data.baseUrl !== baseUrl || !isRecord(data.states)) {
+    return null;
   }
-  return new Set(
-    data.ids.filter((id): id is string => typeof id === 'string')
+  const states = new Map<string, boolean>();
+  for (const [id, on] of Object.entries(data.states)) {
+    if (typeof on === 'boolean') {
+      states.set(id, on);
+    }
+  }
+  return states;
+}
+
+/**
+ * The selected extension ids for a Jupyter instance.
+ *
+ * Each catalog extension starts as its catalog default, and each id in
+ * `packageIds` starts selected. The saved record for this instance overrides
+ * either default. A record written for another instance, or a malformed one,
+ * is ignored.
+ */
+export function selectionFor(
+  raw: string | null,
+  baseUrl: string | undefined,
+  packageIds: readonly string[]
+): Set<string> {
+  const defaults = new Map<string, boolean>(
+    CATALOG_EXTENSIONS.map(entry => [
+      entry.id,
+      DEFAULT_SELECTION.includes(entry.id)
+    ])
   );
+  for (const id of packageIds) {
+    defaults.set(id, true);
+  }
+  const states = savedStates(raw, baseUrl) ?? new Map<string, boolean>();
+  const selected = new Set<string>();
+  for (const [id, on] of defaults) {
+    if (states.get(id) ?? on) {
+      selected.add(id);
+    }
+  }
+  return selected;
 }

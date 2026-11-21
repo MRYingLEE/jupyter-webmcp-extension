@@ -8,8 +8,9 @@ import {
   WEBMCP_PACKAGE
 } from '../src/shared/config';
 import { catalogEntry } from '../src/shared/catalog';
-import { decideInjection, injectRuntime } from '../src/shared/decision';
+import { decideInjection, injectRuntime, packageEntries } from '../src/shared/decision';
 import { selectionFor, serializeSelection } from '../src/shared/selection';
+import type { IRuntimeArtifact } from '../src/shared/runtime-catalog';
 
 function pageConfig(overrides: Partial<IPageConfig> = {}): IPageConfig {
   return {
@@ -107,7 +108,7 @@ describe('decideInjection', () => {
 describe('injectRuntime', () => {
   it('adds the runtime entry and the decision the runtime reads', () => {
     const config = pageConfig();
-    const result = injectRuntime(config, decideInjection(config), LOAD, BUILDS);
+    const result = injectRuntime(config, decideInjection(config), LOAD, BUILDS, []);
 
     expect(result.federated_extensions.at(-1)).toEqual({
       name: RUNTIME_PACKAGE,
@@ -120,7 +121,7 @@ describe('injectRuntime', () => {
   it('adds the selected catalog entries and their flags', () => {
     const config = pageConfig();
     const decision = decideInjection(config, new Set(ANYWIDGET_11));
-    const result = injectRuntime(config, decision, LOAD, BUILDS);
+    const result = injectRuntime(config, decision, LOAD, BUILDS, []);
 
     expect(result.federated_extensions.slice(-2)).toEqual([
       {
@@ -146,8 +147,8 @@ describe('injectRuntime', () => {
 
   it('is idempotent on a second read', () => {
     const config = pageConfig();
-    const once = injectRuntime(config, decideInjection(config), LOAD, BUILDS);
-    const twice = injectRuntime(once, decideInjection(once), LOAD, BUILDS);
+    const once = injectRuntime(config, decideInjection(config), LOAD, BUILDS, []);
+    const twice = injectRuntime(once, decideInjection(once), LOAD, BUILDS, []);
     expect(twice).toBe(once);
   });
 
@@ -158,28 +159,95 @@ describe('injectRuntime', () => {
         { name: WEBMCP_PACKAGE, load: 'remoteEntry.js' }
       ]
     });
-    expect(injectRuntime(config, decideInjection(config), LOAD, BUILDS)).toBe(config);
+    expect(injectRuntime(config, decideInjection(config), LOAD, BUILDS, [])).toBe(config);
+  });
+
+  it('adds selected packages without the runtime when the page needs none', () => {
+    const config = pageConfig({
+      federated_extensions: [
+        { name: AI_COMMANDS_PACKAGE, load: 'remoteEntry.js' },
+        { name: WEBMCP_PACKAGE, load: 'remoteEntry.js' }
+      ]
+    });
+    const packages = [
+      { id: 'pypi:a', name: 'a-ext', load: './static/remoteEntry.a.js', extension: './extension' }
+    ];
+    const result = injectRuntime(config, decideInjection(config), LOAD, BUILDS, packages);
+
+    expect(result.federated_extensions.at(-1)).toEqual({
+      name: 'a-ext',
+      load: './static/remoteEntry.a.js',
+      extension: './extension'
+    });
+    expect(result[RUNTIME_CONFIG_KEY]).toBeUndefined();
+  });
+});
+
+describe('packageEntries', () => {
+  const artifact = (federation: string): IRuntimeArtifact => ({
+    version: '1.0.0',
+    federation,
+    load: './static/remoteEntry.js',
+    extension: './extension',
+    urls: { 'static/remoteEntry.js': 'blob:https://x/1' }
+  });
+
+  it('keeps the selected packages the page does not provide, first name wins', () => {
+    const config = pageConfig({
+      federated_extensions: [{ name: AI_COMMANDS_PACKAGE, load: 'remoteEntry.js' }],
+      disabledExtensions: ['disabled-pkg']
+    });
+    const artifacts = {
+      'pypi:a': artifact('a-ext'),
+      'pypi:a-copy': artifact('a-ext'),
+      'pypi:b': artifact('b-ext'),
+      'pypi:native': artifact(AI_COMMANDS_PACKAGE),
+      'pypi:pinned': artifact(catalogEntry('anywidget-0.11')!.federation),
+      'pypi:disabled': artifact('disabled-pkg'),
+      'pypi:unselected': artifact('unselected-ext')
+    };
+    const selected = new Set([
+      'pypi:a',
+      'pypi:a-copy',
+      'pypi:b',
+      'pypi:native',
+      'pypi:pinned',
+      'pypi:disabled'
+    ]);
+
+    expect(packageEntries(config, selected, artifacts)).toEqual([
+      { id: 'pypi:a', name: 'a-ext', load: './static/remoteEntry.js', extension: './extension' },
+      { id: 'pypi:b', name: 'b-ext', load: './static/remoteEntry.js', extension: './extension' }
+    ]);
   });
 });
 
 describe('selectionFor', () => {
-  it('selects the default extensions when the instance has no saved record', () => {
-    expect([...selectionFor(null, 'http://localhost:8888/')]).toEqual(['anywidget-0.11']);
-    expect([...selectionFor('not json', 'http://localhost:8888/')]).toEqual(['anywidget-0.11']);
+  const base = 'http://localhost:8888/';
+
+  it('selects the default extensions and new packages when there is no saved record', () => {
+    expect([...selectionFor(null, base, [])]).toEqual(['anywidget-0.11']);
+    expect([...selectionFor('not json', base, [])]).toEqual(['anywidget-0.11']);
+    expect(selectionFor(null, base, ['pypi:my-widget']).has('pypi:my-widget')).toBe(true);
   });
 
-  it('returns the ids written for the same Jupyter instance', () => {
-    const raw = serializeSelection('http://localhost:8888/', ['anywidget-0.10', 'anywidget-0.10']);
-    expect([...selectionFor(raw, 'http://localhost:8888/')]).toEqual(['anywidget-0.10']);
+  it('applies the saved states for the same Jupyter instance', () => {
+    const raw = serializeSelection(base, { 'anywidget-0.11': false, 'anywidget-0.10': true });
+    expect([...selectionFor(raw, base, [])]).toEqual(['anywidget-0.10']);
   });
 
-  it('applies the default, not another instance record', () => {
-    const raw = serializeSelection('http://localhost:8888/', ['anywidget-0.10']);
-    expect([...selectionFor(raw, 'http://localhost:9999/')]).toEqual(['anywidget-0.11']);
+  it('selects a package loaded after the record was saved', () => {
+    const raw = serializeSelection(base, { 'anywidget-0.11': true });
+    expect(selectionFor(raw, base, ['pypi:new-widget']).has('pypi:new-widget')).toBe(true);
   });
 
-  it('treats a record with no ids as an opt-out', () => {
-    const raw = serializeSelection('http://localhost:8888/', []);
-    expect(selectionFor(raw, 'http://localhost:8888/').size).toBe(0);
+  it('keeps a package the user turned off', () => {
+    const raw = serializeSelection(base, { 'pypi:my-widget': false });
+    expect(selectionFor(raw, base, ['pypi:my-widget']).has('pypi:my-widget')).toBe(false);
+  });
+
+  it('ignores a record written for another instance', () => {
+    const raw = serializeSelection(base, { 'anywidget-0.11': false });
+    expect([...selectionFor(raw, 'http://localhost:9999/', [])]).toEqual(['anywidget-0.11']);
   });
 });

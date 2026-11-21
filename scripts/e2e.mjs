@@ -417,7 +417,7 @@ async function checkReload(context, worker, base) {
 
 // Catalog extensions are injected per tab from a selection the popup stores in sessionStorage (the key is
 // `jupyter-webmcp-extension:catalog-selection`). With no record for the Jupyter instance, the default selection
-// (anywidget 0.11) applies. A record with no ids opts the instance out. The selection names the instance by
+// (anywidget 0.11) applies. A record that sets the entry to false opts the instance out. The selection names the instance by
 // baseUrl, so a record for another instance in the same tab is ignored. The page hook reads the selection before
 // JupyterLab starts, so the selection is written on a same-origin page and /lab is loaded afterwards.
 const CATALOG_SELECTION_KEY = 'jupyter-webmcp-extension:catalog-selection';
@@ -475,7 +475,7 @@ async function checkCatalog(context, worker, base) {
   const otherInstance = await openLabWithSelection(
     context,
     base,
-    JSON.stringify({ baseUrl: `${baseUrl}other-instance/`, ids: [] })
+    JSON.stringify({ baseUrl: `${baseUrl}other-instance/`, states: { [CATALOG_ID]: false } })
   );
   await until(
     async () => (await readStatuses(worker, base)).find(catalogActive),
@@ -483,8 +483,8 @@ async function checkCatalog(context, worker, base) {
   );
   await otherInstance.close();
 
-  // An empty record for this instance opts it out of the default.
-  const optOut = await openLabWithSelection(context, base, JSON.stringify({ baseUrl, ids: [] }));
+  // A record that turns the catalog entry off for this instance opts it out of the default.
+  const optOut = await openLabWithSelection(context, base, JSON.stringify({ baseUrl, states: { [CATALOG_ID]: false } }));
   await waitForStatuses(worker, base);
   assert.ok(
     (await readStatuses(worker, base)).every(item => !(CATALOG_ID in item.components)),
@@ -492,7 +492,7 @@ async function checkCatalog(context, worker, base) {
   );
   await optOut.close();
 
-  const lab = await openLabWithSelection(context, base, JSON.stringify({ baseUrl, ids: [CATALOG_ID] }));
+  const lab = await openLabWithSelection(context, base, JSON.stringify({ baseUrl, states: { [CATALOG_ID]: true } }));
   await until(
     async () => (await readStatuses(worker, base)).find(catalogActive),
     `${base}: ${CATALOG_ID} active`

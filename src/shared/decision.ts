@@ -21,6 +21,7 @@ import {
   ICatalogEntry,
   catalogEntry
 } from './catalog';
+import { IRuntimeArtifact } from './runtime-catalog';
 
 /**
  * What happens to one component:
@@ -56,7 +57,7 @@ export interface IInjectionDecision {
 
 /** One file the runtime injects, and the component that reports on it. */
 export interface IInjectedEntry {
-  /** The status component: `runtime` or a catalog id. */
+  /** The status component: `runtime`, a catalog id, or a package id. */
   component: string;
   /** The federated extension name, as JupyterLab loads it. */
   name: string;
@@ -64,8 +65,18 @@ export interface IInjectedEntry {
   load: string;
   /** The module exporting the plugins. */
   extension: string;
-  /** The bundled file, relative to the runtime base URL. */
-  path: string;
+  /** The bundled file, relative to the runtime base URL. Absent for a package, which is served from its verified files. */
+  path?: string;
+}
+
+/** A verified package the page injects as a federated extension. */
+export interface IPackageEntry {
+  /** The package's catalog id, `pypi:<name>`. */
+  id: string;
+  /** The federated extension name. */
+  name: string;
+  load: string;
+  extension: string;
 }
 
 /**
@@ -156,33 +167,66 @@ export function needsRuntime(decision: IInjectionDecision): boolean {
 }
 
 /**
- * The files the page hook redirects to the extension, in load order.
+ * The verified packages the page injects: selected, not loaded by the page
+ * already, not disabled by the configuration, and not named like a pinned
+ * entry, which the page provides from its bundle. The first package of each
+ * federation name wins.
+ */
+export function packageEntries(
+  config: IPageConfig,
+  selected: ReadonlySet<string>,
+  artifacts: Record<string, IRuntimeArtifact>
+): IPackageEntry[] {
+  const native = nativeExtensionNames(config);
+  const pinned = new Set(CATALOG.map(entry => entry.federation));
+  const taken = new Set<string>();
+  const entries: IPackageEntry[] = [];
+  for (const [id, artifact] of Object.entries(artifacts)) {
+    const name = artifact.federation;
+    if (
+      !selected.has(id) ||
+      native.has(name) ||
+      pinned.has(name) ||
+      taken.has(name) ||
+      isExtensionDisabled(config, name)
+    ) {
+      continue;
+    }
+    taken.add(name);
+    entries.push({ id, name, load: artifact.load, extension: artifact.extension });
+  }
+  return entries;
+}
+
+/**
+ * The files the page hook redirects to the extension, in load order: the
+ * runtime when it is needed, the injected catalog entries, then the packages.
  *
- * Empty when nothing is injected. A catalog entry without a build is skipped;
- * the build step always provides every entry in the pins.
+ * A catalog entry without a build is skipped; the build step always provides
+ * every entry in the pins.
  */
 export function injectedEntries(
   decision: IInjectionDecision,
   runtimeLoad: string,
-  builds: CatalogBuilds
+  builds: CatalogBuilds,
+  packages: readonly IPackageEntry[]
 ): IInjectedEntry[] {
-  if (!needsRuntime(decision)) {
-    return [];
+  const entries: IInjectedEntry[] = [];
+  if (needsRuntime(decision)) {
+    entries.push({
+      component: 'runtime',
+      name: RUNTIME_PACKAGE,
+      load: runtimeLoad,
+      extension: RUNTIME_EXTENSION,
+      path: runtimeLoad
+    });
   }
-  const runtime: IInjectedEntry = {
-    component: 'runtime',
-    name: RUNTIME_PACKAGE,
-    load: runtimeLoad,
-    extension: RUNTIME_EXTENSION,
-    path: runtimeLoad
-  };
-  const catalog: IInjectedEntry[] = [];
   for (const entry of CATALOG) {
     const build = builds[entry.id];
     if (decision.catalog[entry.id] !== 'injected' || !build) {
       continue;
     }
-    catalog.push({
+    entries.push({
       component: entry.id,
       name: entry.federation,
       load: build.load,
@@ -190,12 +234,20 @@ export function injectedEntries(
       path: `catalog/${entry.id}/${build.load}`
     });
   }
-  return [runtime, ...catalog];
+  for (const pkg of packages) {
+    entries.push({
+      component: pkg.id,
+      name: pkg.name,
+      load: pkg.load,
+      extension: pkg.extension
+    });
+  }
+  return entries;
 }
 
 /**
- * Add the runtime and the injected catalog entries to the configuration, with
- * the decision the runtime reads.
+ * Add the runtime, the injected catalog entries, and the packages to the
+ * configuration, with the decision the runtime reads.
  *
  * Returns the configuration unchanged when nothing is injected, or when the
  * runtime is already listed (for example after a second read).
@@ -204,9 +256,10 @@ export function injectRuntime(
   config: IPageConfig,
   decision: IInjectionDecision,
   runtimeLoad: string,
-  builds: CatalogBuilds
+  builds: CatalogBuilds,
+  packages: readonly IPackageEntry[]
 ): IPageConfig {
-  const entries = injectedEntries(decision, runtimeLoad, builds);
+  const entries = injectedEntries(decision, runtimeLoad, builds, packages);
   if (entries.length === 0) {
     return config;
   }
@@ -215,6 +268,13 @@ export function injectRuntime(
   );
   if (listed) {
     return config;
+  }
+  const federated = [
+    ...config.federated_extensions,
+    ...entries.map(({ name, load, extension }) => ({ name, load, extension }))
+  ];
+  if (!needsRuntime(decision)) {
+    return { ...config, federated_extensions: federated };
   }
   const catalog = entries
     .filter(entry => entry.component !== 'runtime')
@@ -225,14 +285,7 @@ export function injectRuntime(
     .filter(flag => flag.plugin !== '');
   return {
     ...config,
-    federated_extensions: [
-      ...config.federated_extensions,
-      ...entries.map(({ name, load, extension }) => ({
-        name,
-        load,
-        extension
-      }))
-    ],
+    federated_extensions: federated,
     [RUNTIME_CONFIG_KEY]: {
       ai: decision.ai === 'injected',
       webmcp: decision.webmcp === 'injected',

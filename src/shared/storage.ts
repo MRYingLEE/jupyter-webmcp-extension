@@ -8,5 +8,5 @@ export const ENABLED_ORIGINS_KEY = 'enabledOrigins';
 /** The raw WebMCP settings, as edited on the options page. */
 export const SETTINGS_STORAGE_KEY = 'settings';
 
-/** The runtime catalog's manifest URL, fetch time, and verified versions. */
+/** The loaded runtime packages: each one's name, version, federation name, and file list. */
 export const RUNTIME_CATALOG_KEY = 'runtimeCatalog';

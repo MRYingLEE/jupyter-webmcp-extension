@@ -57,28 +57,38 @@ export interface IRuntimeArtifactsMessage {
   type: 'runtimeArtifacts';
 }
 
-/** Fetch, verify, and store the runtime catalog from a manifest URL. */
-export interface IRefreshRuntimeCatalogMessage {
-  type: 'refreshRuntimeCatalog';
-  manifestUrl: string;
+/** Download, verify, and store a PyPI package's labextension. */
+export interface ILoadRuntimePackageMessage {
+  type: 'loadRuntimePackage';
+  name: string;
+  version: string;
 }
 
-/** Remove the stored runtime catalog. */
-export interface IClearRuntimeCatalogMessage {
-  type: 'clearRuntimeCatalog';
+/** Remove a loaded runtime package. */
+export interface IUnloadRuntimePackageMessage {
+  type: 'unloadRuntimePackage';
+  id: string;
 }
 
-/** Ask for the stored runtime catalog's state. */
+/** Ask for the loaded runtime packages. */
 export interface IRuntimeCatalogStateMessage {
   type: 'runtimeCatalogState';
 }
 
-/** The stored runtime catalog: its manifest, when it was fetched, and the verified versions. */
+/** A loaded runtime package. */
+export interface IRuntimePackageState {
+  /** The catalog id, `pypi:` and the normalized name. */
+  id: string;
+  name: string;
+  version: string;
+  /** The federation container name that the package's remote entry registers. */
+  federation: string;
+  fetchedAt: number;
+}
+
+/** The loaded runtime packages. */
 export interface IRuntimeCatalogState {
-  manifestUrl?: string;
-  fetchedAt?: number;
-  /** The verified version of each catalog id that the store holds. */
-  versions: Record<string, string>;
+  packages: IRuntimePackageState[];
 }
 
 /** Messages handled by the service worker. */
@@ -88,6 +98,6 @@ export type ExtensionMessage =
   | IDisableMessage
   | IStateMessage
   | IRuntimeArtifactsMessage
-  | IRefreshRuntimeCatalogMessage
-  | IClearRuntimeCatalogMessage
+  | ILoadRuntimePackageMessage
+  | IUnloadRuntimePackageMessage
   | IRuntimeCatalogStateMessage;

@@ -21,22 +21,40 @@
     <section>
       <h2>Runtime extensions</h2>
       <p class="muted">
-        Jupyter extensions can be loaded at runtime from a manifest URL instead
-        of the bundled builds. Each file is checked against its sha256 before it
-        is stored, and a failed check keeps the previous catalog. The bundled
-        builds are used when no verified runtime applies. Pages pick up a new
-        catalog after they reload.
+        Jupyter extensions can be loaded at runtime from PyPI, instead of the
+        bundled builds. Enter the package name and version. The package's
+        universal wheel is downloaded from PyPI, checked against the sha256 that
+        PyPI publishes, and its JupyterLab extension is stored. A failed check
+        stores nothing. Loaded packages start selected; clear one in the popup to
+        stop it loading. Pages pick up changes after they reload.
       </p>
-      <label class="field">
-        Manifest URL
-        <input id="manifest-url" type="url" spellcheck="false" placeholder="https://example.com/runtime-catalog.json" />
-      </label>
+      <p class="muted">
+        The package must ship exactly one JupyterLab extension in a
+        <code>py3-none-any</code> wheel. Examples:
+      </p>
+      <ul class="muted">
+        <li><code>anywidget</code> <code>0.11.0</code></li>
+        <li><code>jupyterlab-drawio</code> <code>0.9.0</code></li>
+        <li><code>jupyterlab-execute-time</code> <code>3.3.0</code></li>
+        <li><code>jupyterlab-code-formatter</code> <code>3.1.0</code></li>
+      </ul>
+      <p class="muted">
+        A package without a JupyterLab extension, such as <code>numpy</code>, is
+        rejected.
+      </p>
       <div class="actions">
-        <button id="fetch-catalog" type="button">Fetch and verify</button>
-        <button id="clear-catalog" type="button">Clear stored catalog</button>
+        <label class="field">
+          Package name
+          <input id="package-name" type="text" spellcheck="false" placeholder="anywidget" />
+        </label>
+        <label class="field">
+          Version
+          <input id="package-version" type="text" spellcheck="false" placeholder="0.11.0" />
+        </label>
+        <button id="load-package" type="button">Load from PyPI</button>
       </div>
-      <div id="catalog-message" class="message" hidden></div>
-      <ul id="catalog-state" class="sites"></ul>
+      <div id="package-message" class="message" hidden></div>
+      <ul id="package-state" class="sites"></ul>
     </section>
 
     <section>

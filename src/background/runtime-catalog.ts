@@ -1,22 +1,26 @@
 /**
- * The service worker's runtime catalog store. The verified files live in
- * IndexedDB; the manifest URL, fetch time, and each entry's version and file
- * list live in `chrome.storage.local`.
+ * The service worker's runtime package store. Each loaded package's labextension
+ * files live in IndexedDB under `<id>/<path>`; its name, version, federation
+ * name, and file list live in `chrome.storage.local`.
  *
- * A refresh is all-or-nothing: every file is fetched and checked against its
- * sha256 before anything is stored, and the files are replaced in one
- * transaction. Every operation goes through one queue, so a payload never mixes
- * the files of two refreshes.
+ * A load is all-or-nothing: the wheel is checked against the sha256 PyPI
+ * publishes before anything is stored, and the package's files are replaced in
+ * one transaction. Every operation goes through one queue, so a payload never
+ * mixes the files of two loads.
  */
 
 import type { IRuntimeCatalogState } from '../shared/messages';
+import { IRuntimeArtifactPayload, encodeBase64, sha256Hex } from '../shared/runtime-catalog';
 import {
-  IRuntimeArtifactPayload,
-  IRuntimeEntry,
-  encodeBase64,
-  parseRuntimeManifest,
-  sha256Hex
-} from '../shared/runtime-catalog';
+  PYPI_ORIGINS,
+  findLabextension,
+  isPackageId,
+  packageId,
+  packageRequest,
+  pypiReleaseUrl,
+  selectWheel
+} from '../shared/pypi';
+import { readZip } from '../shared/zip';
 import { isRecord } from '../shared/config';
 import { originPattern } from '../shared/origin';
 import { RUNTIME_CATALOG_KEY } from '../shared/storage';
@@ -24,17 +28,18 @@ import { RUNTIME_CATALOG_KEY } from '../shared/storage';
 const DB_NAME = 'jwe-runtime-catalog';
 const STORE = 'files';
 
-interface IStoredEntry {
+interface IStoredPackage {
+  name: string;
   version: string;
+  federation: string;
   load: string;
   extension: string;
   paths: string[];
+  fetchedAt: number;
 }
 
 interface IStoredCatalog {
-  manifestUrl: string;
-  fetchedAt: number;
-  entries: Record<string, IStoredEntry>;
+  packages: Record<string, IStoredPackage>;
 }
 
 let queue: Promise<unknown> = Promise.resolve();
@@ -77,21 +82,6 @@ function fileKey(id: string, path: string): string {
   return `${id}/${path}`;
 }
 
-/** The manifest URL, which must be https, or http on a loopback address for development. */
-function manifestSource(text: string): URL {
-  let url: URL;
-  try {
-    url = new URL(text);
-  } catch {
-    throw new Error('The manifest URL is not a valid URL.');
-  }
-  const loopback = url.hostname === 'localhost' || url.hostname === '127.0.0.1';
-  if (url.protocol !== 'https:' && !(url.protocol === 'http:' && loopback)) {
-    throw new Error('The manifest URL must use https.');
-  }
-  return url;
-}
-
 async function fetchBytes(url: URL): Promise<ArrayBuffer> {
   const response = await fetch(url, { cache: 'no-store', credentials: 'omit' });
   if (!response.ok) {
@@ -100,137 +90,145 @@ async function fetchBytes(url: URL): Promise<ArrayBuffer> {
   return response.arrayBuffer();
 }
 
-/** Fetch every file of an entry and check its sha256. Nothing is stored here. */
-async function fetchEntry(
-  entry: IRuntimeEntry,
-  manifestUrl: URL,
-  files: Map<string, ArrayBuffer>
-): Promise<IStoredEntry> {
-  const base = new URL(entry.base, manifestUrl);
-  for (const file of entry.files) {
-    const bytes = await fetchBytes(new URL(file.path, base));
-    if ((await sha256Hex(bytes)) !== file.sha256) {
-      throw new Error(`${entry.id}: ${file.path} does not match its sha256.`);
-    }
-    files.set(fileKey(entry.id, file.path), bytes);
-  }
-  return {
-    version: entry.version,
-    load: entry.load,
-    extension: entry.extension,
-    paths: entry.files.map(file => file.path)
-  };
+/** Delete every stored file of a package, within an open transaction. */
+function deletePackageFiles(store: IDBObjectStore, id: string): void {
+  const prefix = `${id}/`;
+  store.delete(IDBKeyRange.bound(prefix, `${prefix}\uffff`));
 }
 
-async function readStored(): Promise<IStoredCatalog | undefined> {
+/** The PyPI hosts that a load reads, which the optional host permission must cover. */
+async function requirePypiPermission(): Promise<void> {
+  const origins = PYPI_ORIGINS.map(origin => originPattern(origin));
+  if (!(await chrome.permissions.contains({ origins }))) {
+    throw new Error('Permission to read pypi.org and files.pythonhosted.org is not granted.');
+  }
+}
+
+async function readStored(): Promise<IStoredCatalog> {
   const stored: unknown = (await chrome.storage.local.get(RUNTIME_CATALOG_KEY))[RUNTIME_CATALOG_KEY];
-  if (!isRecord(stored) || typeof stored.manifestUrl !== 'string' || !isRecord(stored.entries)) {
-    return undefined;
+  if (!isRecord(stored) || !isRecord(stored.packages)) {
+    return { packages: {} };
   }
   return stored as unknown as IStoredCatalog;
 }
 
-function stateOf(stored: IStoredCatalog | undefined): IRuntimeCatalogState {
-  if (!stored) {
-    return { versions: {} };
-  }
+function stateOf(stored: IStoredCatalog): IRuntimeCatalogState {
   return {
-    manifestUrl: stored.manifestUrl,
-    fetchedAt: stored.fetchedAt,
-    versions: Object.fromEntries(
-      Object.entries(stored.entries).map(([id, entry]) => [id, entry.version])
-    )
+    packages: Object.entries(stored.packages).map(([id, pkg]) => ({
+      id,
+      name: pkg.name,
+      version: pkg.version,
+      federation: pkg.federation,
+      fetchedAt: pkg.fetchedAt
+    }))
   };
 }
 
 /**
- * Fetch the manifest and every file it lists, verify them, and replace the
- * stored catalog. On any failure the previous catalog is kept.
+ * Download a package's universal wheel from PyPI, verify it against the sha256
+ * PyPI publishes, and store its labextension in place of any earlier copy of
+ * the same package. On any failure the stored package is kept.
  *
- * @throws Error when the manifest, a file, or a permission is not acceptable.
+ * @throws Error when the name, the version, the permission, the download, or the wheel is not acceptable.
  */
-export function refreshRuntimeCatalog(manifestUrl: string): Promise<IRuntimeCatalogState> {
+export function loadRuntimePackage(name: string, version: string): Promise<IRuntimeCatalogState> {
   return serialize(async () => {
-    const url = manifestSource(manifestUrl);
-    if (!(await chrome.permissions.contains({ origins: [originPattern(url.origin)] }))) {
-      throw new Error(`Permission to read ${url.origin} is not granted.`);
-    }
-    const manifest = parseRuntimeManifest(
-      new TextDecoder().decode(await fetchBytes(url)),
-      url.href
+    const request = packageRequest(name, version);
+    const id = packageId(request.name);
+    await requirePypiPermission();
+
+    const metadata: unknown = JSON.parse(
+      new TextDecoder().decode(await fetchBytes(new URL(pypiReleaseUrl(request.name, request.version))))
     );
-    const files = new Map<string, ArrayBuffer>();
-    const entries: Record<string, IStoredEntry> = {};
-    for (const entry of manifest.entries) {
-      entries[entry.id] = await fetchEntry(entry, url, files);
+    const wheel = selectWheel(metadata);
+    const wheelUrl = new URL(wheel.url);
+    if (!PYPI_ORIGINS.includes(wheelUrl.origin)) {
+      throw new Error(`${wheel.filename} is served from ${wheelUrl.origin}, not PyPI.`);
     }
+    const bytes = await fetchBytes(wheelUrl);
+    if ((await sha256Hex(bytes)) !== wheel.sha256) {
+      throw new Error(`${wheel.filename} does not match its sha256 on PyPI.`);
+    }
+    const labextension = findLabextension(await readZip(new Uint8Array(bytes)));
 
     const database = await openDatabase();
     const transaction = database.transaction(STORE, 'readwrite');
     const store = transaction.objectStore(STORE);
-    store.clear();
-    for (const [key, bytes] of files) {
-      store.put(bytes, key);
+    deletePackageFiles(store, id);
+    for (const [path, content] of labextension.files) {
+      store.put(content.slice().buffer as ArrayBuffer, fileKey(id, path));
     }
     await transactionDone(transaction);
 
-    const stored: IStoredCatalog = { manifestUrl: url.href, fetchedAt: Date.now(), entries };
+    const stored = await readStored();
+    stored.packages[id] = {
+      name: request.name,
+      version: request.version,
+      federation: labextension.federation,
+      load: labextension.load,
+      extension: labextension.extension,
+      paths: [...labextension.files.keys()],
+      fetchedAt: Date.now()
+    };
     await chrome.storage.local.set({ [RUNTIME_CATALOG_KEY]: stored });
     return stateOf(stored);
   });
 }
 
-/** The stored catalog's manifest, fetch time, and verified versions. */
+/** Remove a loaded package and its files. */
+export function unloadRuntimePackage(id: string): Promise<IRuntimeCatalogState> {
+  return serialize(async () => {
+    if (!isPackageId(id)) {
+      throw new Error('Only runtime packages can be unloaded.');
+    }
+    const database = await openDatabase();
+    const transaction = database.transaction(STORE, 'readwrite');
+    deletePackageFiles(transaction.objectStore(STORE), id);
+    await transactionDone(transaction);
+
+    const stored = await readStored();
+    delete stored.packages[id];
+    await chrome.storage.local.set({ [RUNTIME_CATALOG_KEY]: stored });
+    return stateOf(stored);
+  });
+}
+
+/** The loaded packages, with their names, versions, and federation names. */
 export function runtimeCatalogState(): Promise<IRuntimeCatalogState> {
   return serialize(async () => stateOf(await readStored()));
 }
 
 /**
- * The verified bytes of every complete entry, base64-encoded by path. An entry
- * with a missing file is left out, so the page keeps the bundled build for it.
+ * The verified bytes of every complete package, base64-encoded by path. A
+ * package with a missing file is left out.
  */
 export function runtimeArtifactPayloads(): Promise<Record<string, IRuntimeArtifactPayload>> {
   return serialize(async () => {
     const stored = await readStored();
-    if (!stored) {
-      return {};
-    }
     const database = await openDatabase();
     const store = database.transaction(STORE, 'readonly').objectStore(STORE);
-    const reads = Object.entries(stored.entries).map(([id, entry]) => ({
+    const reads = Object.entries(stored.packages).map(([id, pkg]) => ({
       id,
-      entry,
-      files: entry.paths.map(path =>
-        requestDone<ArrayBuffer | undefined>(store.get(fileKey(id, path)))
-      )
+      pkg,
+      files: pkg.paths.map(path => requestDone<ArrayBuffer | undefined>(store.get(fileKey(id, path))))
     }));
 
     const payloads: Record<string, IRuntimeArtifactPayload> = {};
-    for (const { id, entry, files } of reads) {
+    for (const { id, pkg, files } of reads) {
       const bytes = await Promise.all(files);
       if (bytes.some(item => !(item instanceof ArrayBuffer))) {
         continue;
       }
       payloads[id] = {
-        version: entry.version,
-        load: entry.load,
-        extension: entry.extension,
+        version: pkg.version,
+        federation: pkg.federation,
+        load: pkg.load,
+        extension: pkg.extension,
         files: Object.fromEntries(
-          entry.paths.map((path, index) => [path, encodeBase64(bytes[index] as ArrayBuffer)])
+          pkg.paths.map((path, index) => [path, encodeBase64(bytes[index] as ArrayBuffer)])
         )
       };
     }
     return payloads;
-  });
-}
-
-/** Remove the stored catalog and its files. */
-export function clearRuntimeCatalog(): Promise<void> {
-  return serialize(async () => {
-    const database = await openDatabase();
-    const transaction = database.transaction(STORE, 'readwrite');
-    transaction.objectStore(STORE).clear();
-    await transactionDone(transaction);
-    await chrome.storage.local.remove(RUNTIME_CATALOG_KEY);
   });
 }

@@ -11,7 +11,7 @@ import { parsePageConfig } from '../shared/config';
 import { SELECTION_KEY, selectionFor, serializeSelection } from '../shared/selection';
 import { CATALOG_SOURCES_ATTRIBUTE } from '../../runtime/src/channel';
 import type { ICatalogSource } from '../shared/runtime-catalog';
-import type { IRuntimeCatalogState } from '../shared/messages';
+import type { IRuntimeCatalogState, IRuntimePackageState } from '../shared/messages';
 
 const originLabel = document.getElementById('origin') as HTMLElement;
 const message = document.getElementById('message') as HTMLElement;
@@ -186,24 +186,20 @@ function parseSources(text: string | null): Record<string, ICatalogSource> {
   }
 }
 
-/** The stored runtime catalog's verified versions, by catalog id. */
-async function verifiedVersions(): Promise<Record<string, string>> {
+/** The loaded runtime packages. A failed read yields none. */
+async function loadedPackages(): Promise<IRuntimePackageState[]> {
   try {
     const response = (await chrome.runtime.sendMessage({
       type: 'runtimeCatalogState'
     })) as { ok: boolean; state?: IRuntimeCatalogState };
-    return response.ok && response.state ? response.state.versions : {};
+    return response.ok && response.state ? response.state.packages : [];
   } catch {
-    return {};
+    return [];
   }
 }
 
 /** Describe where the page gets an entry's code: the verified runtime, the bundled build, or nothing. */
-function sourceDetail(
-  id: string,
-  sources: Record<string, ICatalogSource>,
-  verified: Record<string, string>
-): string | null {
+function sourceDetail(id: string, sources: Record<string, ICatalogSource>): string | null {
   const source = sources[id];
   if (!source) {
     return null;
@@ -214,10 +210,7 @@ function sourceDetail(
   if (source.source === 'blocked') {
     return 'Blocked by the page CSP; the bundled build is used for this tab';
   }
-  const available = verified[id];
-  return available
-    ? `Bundled build. Verified runtime ${available} is stored; reload to apply it`
-    : 'Bundled build';
+  return 'Bundled build';
 }
 
 /** The labels of a catalog entry's state and its kernel requirement, if any. */
@@ -267,10 +260,14 @@ async function renderCatalog(id: number, enabled: boolean): Promise<void> {
   catalogNote.hidden = true;
   applyCatalog.hidden = false;
 
-  const selected = selectionFor(snapshot.selection, config.baseUrl);
+  const packages = await loadedPackages();
+  const selected = selectionFor(
+    snapshot.selection,
+    config.baseUrl,
+    packages.map(pkg => pkg.id)
+  );
   const decision = decideInjection(config, selected);
   const sources = parseSources(snapshot.sources);
-  const verified = await verifiedVersions();
   for (const entry of CATALOG) {
     const item = document.createElement('li');
     const state = decision.catalog[entry.id];
@@ -286,9 +283,31 @@ async function renderCatalog(id: number, enabled: boolean): Promise<void> {
       item.append(entry.label);
     }
     const lines = catalogDetails(entry.id, state);
-    const source = sourceDetail(entry.id, sources, verified);
+    const source = sourceDetail(entry.id, sources);
     if (source) {
       lines.push(source);
+    }
+    const detail = document.createElement('div');
+    detail.className = 'status-detail';
+    detail.textContent = lines.join('. ');
+    item.append(detail);
+    catalogList.append(item);
+  }
+  for (const pkg of packages) {
+    const item = document.createElement('li');
+    const label = document.createElement('label');
+    const box = document.createElement('input');
+    box.type = 'checkbox';
+    box.value = pkg.id;
+    box.checked = selected.has(pkg.id);
+    label.append(box, ` ${pkg.name} ${pkg.version}`);
+    item.append(label);
+    const lines = [`Runtime package from PyPI, federation ${pkg.federation}`];
+    const source = sourceDetail(pkg.id, sources);
+    if (source) {
+      lines.push(source);
+    } else if (box.checked) {
+      lines.push('Not loaded on this page; reload after saving');
     }
     const detail = document.createElement('div');
     detail.className = 'status-detail';
@@ -362,12 +381,12 @@ applyCatalog.addEventListener('click', () => {
   if (id === undefined || baseUrl === null) {
     return;
   }
-  const ids = Array.from(
-    catalogList.querySelectorAll<HTMLInputElement>('input[type="checkbox"]:checked'),
-    box => box.value
-  );
+  const states: Record<string, boolean> = {};
+  for (const box of catalogList.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')) {
+    states[box.value] = box.checked;
+  }
   void (async () => {
-    const saved = await writeSelection(id, serializeSelection(baseUrl, ids));
+    const saved = await writeSelection(id, serializeSelection(baseUrl, states));
     if (!saved) {
       showMessage('Could not save the selection for this page.', true);
       return;

@@ -12,10 +12,10 @@ import type {
 } from '../shared/messages';
 import type { IRuntimeStatus } from '../../runtime/src/channel';
 import {
-  clearRuntimeCatalog,
-  refreshRuntimeCatalog,
+  loadRuntimePackage,
   runtimeArtifactPayloads,
-  runtimeCatalogState
+  runtimeCatalogState,
+  unloadRuntimePackage
 } from './runtime-catalog';
 
 const TAB_STATUS_KEY = 'tabStatus';
@@ -292,22 +292,21 @@ async function handleMessage(
       }
       return { ok: true, artifacts: await runtimeArtifactPayloads() };
     }
-    case 'refreshRuntimeCatalog': {
+    case 'loadRuntimePackage': {
       if (!isExtensionPage(sender)) {
         return { ok: false, error: 'Not allowed.' };
       }
       try {
-        return { ok: true, state: await refreshRuntimeCatalog(message.manifestUrl) };
+        return { ok: true, state: await loadRuntimePackage(message.name, message.version) };
       } catch (error) {
         return { ok: false, error: error instanceof Error ? error.message : String(error) };
       }
     }
-    case 'clearRuntimeCatalog':
+    case 'unloadRuntimePackage':
       if (!isExtensionPage(sender)) {
         return { ok: false, error: 'Not allowed.' };
       }
-      await clearRuntimeCatalog();
-      return { ok: true };
+      return { ok: true, state: await unloadRuntimePackage(message.id) };
     case 'runtimeCatalogState':
       if (!isExtensionPage(sender)) {
         return { ok: false, error: 'Not allowed.' };
